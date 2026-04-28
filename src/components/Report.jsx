@@ -48,6 +48,57 @@ function MiniBar({ value }) {
 
 const BUCKET_LABELS_INT = ['≤−3','−2','−1',' 0','+1','+2','≥+3'];
 
+
+function ExportButton({ results }) {
+  const handleExport = () => {
+    const exportable = {
+      formula:         results.formulaStrConsts,
+      score:           results.score,
+      threshold:       results.threshold,
+      consts:          results.consts,
+      threshModStat:   results.threshModStat,
+      quantileMode:    results.quantileMode,
+      bucketThresholds:results.bucketThresholds,
+      bucketBoundaries:results.bucketBoundaries,
+      bucketCounts:    results.bucketCounts,
+      baseline:        BASELINE,
+      breakEven:       BREAKEVEN,
+      correlation:     results.correlation,
+      worstLoss:       results.worstLoss,
+      seasonStdDev:    results.seasonStdDev,
+      confusionMatrix: { tp:results.tp, tn:results.tn, fp:results.fp, fn:results.fn },
+      biasSide:        results.biasSide,
+      bySeason:        results.bySeason,
+      trainTest:       results.trainTest,
+      homeScore:       results.homeScore,
+      awayScore:       results.awayScore,
+      byGap:           results.byGap,
+      byMonth:         results.byMonth,
+      byGameNum:       results.byGameNum,
+      byEloDiff:       results.byEloDiff,
+      roi: {
+        all:   results.roiAll,
+        top25: results.roiTop25,
+        top10: results.roiTop10,
+      },
+    };
+    const blob = new Blob([JSON.stringify(exportable, null, 2)], { type:'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'formula_analysis.json'; a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <button onClick={handleExport} style={{
+      padding:'8px 16px', borderRadius:6,
+      background:'#0f2d10', border:'1px solid #3fb950',
+      color:'#3fb950', fontSize:12, fontWeight:600, cursor:'pointer',
+    }}>
+      ↓ Exporter JSON
+    </button>
+  );
+}
+
 function ScoreGlobal({ results }) {
   const delta = results.score - BASELINE;
   const { threshModStat, quantileMode, bucketThresholds, bucketBoundaries, bucketCounts } = results;
@@ -116,8 +167,11 @@ function ScoreGlobal({ results }) {
         </div>
       )}
 
+      <div style={{ display:'flex', justifyContent:'flex-end', marginTop:12 }}>
+        <ExportButton results={results} />
+      </div>
       {results.formulaStrConsts && (
-        <div style={{ marginTop:14, padding:'10px 14px', background:'#0a0e18', borderRadius:8, border:'1px solid #1c2236' }}>
+        <div style={{ marginTop:10, padding:'10px 14px', background:'#0a0e18', borderRadius:8, border:'1px solid #1c2236' }}>
           <span style={{ fontSize:13, color:'#e6edf3', fontFamily:"'JetBrains Mono', monospace" }}>{results.formulaStrConsts}</span>
         </div>
       )}
@@ -375,6 +429,30 @@ function Confidence({ confidence }) {
   );
 }
 
+
+function ByGameNum({ byGameNum }) {
+  if (!byGameNum?.length) return null;
+  const data = byGameNum.map(({ range, score, n }) => ({ range, score:score!=null?+(score*100).toFixed(2):null, n }));
+  return (
+    <Card title="Progression dans la Saison (max W_s des deux équipes)">
+      <ResponsiveContainer width="100%" height={180}>
+        <LineChart data={data} margin={{ top:5, right:10, left:-10, bottom:5 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+          <XAxis dataKey="range" tick={{ fontSize:11, fill:'#8b949e' }} />
+          <YAxis domain={[50,80]} tick={{ fontSize:11, fill:'#8b949e' }} tickFormatter={v=>`${v}%`} />
+          <Tooltip contentStyle={TOOLTIP_S} formatter={(v,_,p)=>[`${v}%  (${p.payload.n} matchs)`,'Score']} />
+          <ReferenceLine y={BASELINE*100}  stroke="#484f58" strokeDasharray="4 2" />
+          <ReferenceLine y={BREAKEVEN*100} stroke="#f59e0b" strokeDasharray="4 2" />
+          <Line type="monotone" dataKey="score" stroke="#f59e0b" strokeWidth={2} dot={{ fill:'#f59e0b', r:4 }} />
+        </LineChart>
+      </ResponsiveContainer>
+      <div style={{ fontSize:11, color:'#484f58', marginTop:8 }}>
+        Proxy de l'avancement saison = max victoires des deux équipes. Si la précision monte en fin de saison, les stats cumulatives sont plus stables et la formule plus fiable.
+      </div>
+    </Card>
+  );
+}
+
 export default function Report({ results }) {
   if (!results) {
     return (
@@ -397,6 +475,7 @@ export default function Report({ results }) {
         <ByMonth byMonth={results.byMonth} />
         {results.byEloDiff?.length > 0 && <ByEloDiff byEloDiff={results.byEloDiff} />}
       </div>
+      {results.byGameNum?.length > 0 && <ByGameNum byGameNum={results.byGameNum} />}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
         <Distribution distribution={results.distribution} threshold={results.threshold} />
         <Confidence confidence={results.confidence} />

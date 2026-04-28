@@ -14,7 +14,6 @@ const pct  = (v, d=2) => v==null ? '—' : `${(v*100).toFixed(d)}%`;
 const sign = v => v>=0?'+':'';
 const eur  = v => `${sign(v)}${v.toFixed(2)}€`;
 const roiC = v => v>0.05?'#3fb950':v>0?'#56d364':v>-0.03?'#f59e0b':'#f85149';
-const edgeC= v => v>0.04?'#3fb950':v>0.02?'#56d364':v>0?'#f59e0b':v>-0.02?'#d29922':'#f85149';
 
 const ALL_BOOKS = [
   'pinnacle','betfair_ex_eu','matchbook','betfair',
@@ -25,34 +24,42 @@ const ALL_BOOKS = [
   'tipico_de','livescorebet_eu','suprabets',
 ];
 
-// V3: match filters using new stat indices
-// stats[12]=A_MOV_s, stats[13]=B_MOV_s, stats[14]=A_elo, stats[15]=B_elo
-// stats[0]=A_rest, stats[1]=B_rest, stats[4]=A_streak, stats[5]=B_streak
 const MATCH_FILTERS = [
-  { id:'gap_close',    label:'Serrés (|ΔMOV_s|<3)',  cat:'Niveau',   fn:m=>Math.abs(m.stats[12]-m.stats[13])<3 },
-  { id:'gap_medium',   label:'Équilibrés (3-8)',      cat:'Niveau',   fn:m=>{const g=Math.abs(m.stats[12]-m.stats[13]);return g>=3&&g<8;} },
-  { id:'gap_mismatch', label:'Mismatch (≥8)',         cat:'Niveau',   fn:m=>Math.abs(m.stats[12]-m.stats[13])>=8 },
-  { id:'h_b2b',        label:'Home B2B (rest=1)',     cat:'Repos',    fn:m=>m.stats[0]===1 },
-  { id:'a_b2b',        label:'Away B2B (rest=1)',     cat:'Repos',    fn:m=>m.stats[1]===1 },
-  { id:'h_streak3',    label:'Home série+ (≥3)',      cat:'Momentum', fn:m=>m.stats[4]>=3 },
-  { id:'h_streak_neg', label:'Home série- (≤-3)',     cat:'Momentum', fn:m=>m.stats[4]<=-3 },
-  { id:'a_streak3',    label:'Away série+ (≥3)',      cat:'Momentum', fn:m=>m.stats[5]>=3 },
-  { id:'p_heavy_h',    label:'Favori home >70%',      cat:'Marché',   fn:m=>m.no_vig_ref?.home>0.70 },
-  { id:'p_coin',       label:'Coin flip (45-55%)',    cat:'Marché',   fn:m=>{const p=m.no_vig_ref?.home;return p&&p>=0.45&&p<=0.55;} },
-  { id:'p_heavy_a',    label:'Favori away >70%',      cat:'Marché',   fn:m=>m.no_vig_ref?.home<0.30 },
-  { id:'elo_gt100',    label:'Elo gap > 100',         cat:'Elo',      fn:m=>Math.abs(m.stats[14]-m.stats[15])>100 },
-  { id:'elo_lt50',     label:'Elo gap < 50',          cat:'Elo',      fn:m=>Math.abs(m.stats[14]-m.stats[15])<50 },
+  { id:'gap_close',    label:'Serrés (|ΔMOV_s|<3)',   cat:'Niveau',   fn:m=>Math.abs(m.stats[12]-m.stats[13])<3 },
+  { id:'gap_medium',   label:'Équilibrés (3-8)',       cat:'Niveau',   fn:m=>{const g=Math.abs(m.stats[12]-m.stats[13]);return g>=3&&g<8;} },
+  { id:'gap_mismatch', label:'Mismatch (≥8)',          cat:'Niveau',   fn:m=>Math.abs(m.stats[12]-m.stats[13])>=8 },
+  { id:'h_b2b',        label:'Home B2B (rest=1)',      cat:'Repos',    fn:m=>m.stats[0]===1 },
+  { id:'a_b2b',        label:'Away B2B (rest=1)',      cat:'Repos',    fn:m=>m.stats[1]===1 },
+  { id:'h_b2b_a_rest', label:'Home B2B + Away reposé', cat:'Repos',   fn:m=>m.stats[0]===1&&m.stats[1]>=2 },
+  { id:'h_streak3',    label:'Home série+ (≥3)',       cat:'Momentum', fn:m=>m.stats[4]>=3 },
+  { id:'h_streak_neg', label:'Home série- (≤-3)',      cat:'Momentum', fn:m=>m.stats[4]<=-3 },
+  { id:'a_streak3',    label:'Away série+ (≥3)',       cat:'Momentum', fn:m=>m.stats[5]>=3 },
+  { id:'p_heavy_h',    label:'Favori home >70%',       cat:'Marché',   fn:m=>m.no_vig_ref?.home>0.70 },
+  { id:'p_coin',       label:'Coin flip (45-55%)',     cat:'Marché',   fn:m=>{const p=m.no_vig_ref?.home;return p&&p>=0.45&&p<=0.55;} },
+  { id:'p_heavy_a',    label:'Favori away >70%',       cat:'Marché',   fn:m=>m.no_vig_ref?.home<0.30 },
+  { id:'elo_gt100',    label:'Elo gap > 100',          cat:'Elo',      fn:m=>Math.abs(m.stats[14]-m.stats[15])>100 },
+  { id:'elo_lt50',     label:'Elo gap < 50',           cat:'Elo',      fn:m=>Math.abs(m.stats[14]-m.stats[15])<50 },
 ];
 const FILTER_CATS = [...new Set(MATCH_FILTERS.map(f=>f.cat))];
 
-function predict(output, match, optimResult) {
+const DEFAULT_CONSTRAINTS = {
+  enabled:           false,
+  maxStakePct:       5,
+  maxOdds:           5.0,
+  minOdds:           1.25,
+  stopLossPct:       50,
+  maxConsecLosses:   15,
+  flatKellyFraction: 0.25,
+};
+
+function predictOne(output, match, optimResult) {
   if (optimResult.threshModStat >= 0 && optimResult.bucketThresholds)
     return predictMatch(output, match.stats, optimResult);
   return output > optimResult.threshold;
 }
 
 function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
-  const { seasons, bookmakers, strategy, baseStake, activeFilters, confidence } = params;
+  const { seasons, bookmakers, strategy, baseStake, activeFilters, confidence, constraints } = params;
   if (!opcodes.length || !bookmakers.length || !seasons.length) return null;
 
   const optimResult = optimize(opcodes, matches, threshModStat, quantileMode);
@@ -80,28 +87,40 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     const pctIdx = confidence==='top25'?0.75:0.90;
     const minConf = confs[Math.floor(confs.length*pctIdx)]??0;
     const kept = pool.map((m,i)=>({m,o:outputs[i],c:Math.abs(outputs[i]-optimResult.threshold)})).filter(x=>x.c>=minConf);
-    pool = kept.map(x=>x.m);
+    pool    = kept.map(x=>x.m);
     outputs = kept.map(x=>x.o);
   }
   if (!pool.length) return { empty:true };
 
-  const initialBankroll = strategy==='kelly'?baseStake:baseStake*100;
+  const C = constraints?.enabled ? constraints : DEFAULT_CONSTRAINTS;
+  const initialBankroll = strategy==='kelly' ? baseStake : baseStake*100;
   let bankroll=initialBankroll, peak=initialBankroll, maxDD=0;
   const equity=[{ date:'Départ', value:bankroll }];
   let totalBets=0, totalWins=0, totalPnL=0, consecLosses=0;
   let longestWS=0, longestLS=0, curWS=0, curLS=0, totalOddsSum=0;
+  let grossWins=0, grossLosses=0;
+  let stopped=false, stopReason='';
   const byBook={}, bySeason={};
   bookmakers.forEach(b=>{byBook[b]={bets:0,wins:0,pnl:0};});
 
   pool.forEach((match,i) => {
+    if (stopped) return;
+    if (C.enabled && bankroll < initialBankroll*(1-C.stopLossPct/100)) {
+      stopped=true; stopReason=`Stop-loss (bankroll < ${100-C.stopLossPct}% initiale)`; return;
+    }
+    if (C.enabled && consecLosses >= C.maxConsecLosses) {
+      stopped=true; stopReason=`${C.maxConsecLosses} pertes consécutives`; return;
+    }
+
     const out = outputs[i];
-    const predHome = predict(out, match, optimResult);
+    const predHome = predictOne(out, match, optimResult);
     const correct  = predHome===(match.a_wins===1);
     if (!bySeason[match.season]) bySeason[match.season]={bets:0,wins:0,pnl:0};
 
     bookmakers.forEach(book => {
       if (!match.odds?.[book]) return;
       const betOdds = predHome?match.odds[book].home:match.odds[book].away;
+      if (C.enabled && (betOdds > C.maxOdds || betOdds < C.minOdds)) return;
 
       let stake;
       if (strategy==='fixed') {
@@ -110,7 +129,10 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
         const p = match.no_vig_ref?(predHome?match.no_vig_ref.home:match.no_vig_ref.away):0.52;
         const b = betOdds-1;
         const fk = b>0?Math.max(0,(p*b-(1-p))/b):0;
-        stake = Math.min(bankroll*fk*0.25, bankroll*0.05);
+        const fraction = C.enabled ? C.flatKellyFraction : 0.25;
+        stake = bankroll * fk * fraction;
+        const cap = C.enabled ? C.maxStakePct/100 : 0.05;
+        stake = Math.min(stake, bankroll*cap);
         stake = Math.max(stake, 0.01);
       }
       stake = Math.min(stake, bankroll*0.95);
@@ -122,11 +144,13 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
       if (correct) {
         const profit=stake*(betOdds-1);
         totalWins++; totalPnL+=profit; bankroll+=profit;
+        grossWins+=profit;
         byBook[book].wins++; byBook[book].pnl+=profit;
         bySeason[match.season].wins++; bySeason[match.season].pnl+=profit;
         consecLosses=0; curWS++; curLS=0; longestWS=Math.max(longestWS,curWS);
       } else {
         totalPnL-=stake; bankroll-=stake;
+        grossLosses+=stake;
         byBook[book].pnl-=stake; bySeason[match.season].pnl-=stake;
         consecLosses++; curLS++; curWS=0; longestLS=Math.max(longestLS,curLS);
       }
@@ -136,7 +160,6 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     if (bankroll>peak) peak=bankroll;
     const dd=(peak-bankroll)/peak;
     if (dd>maxDD) maxDD=dd;
-
     if ((i+1)%5===0||i===pool.length-1)
       equity.push({ date:match.date.slice(0,7), value:Math.round(bankroll*100)/100 });
   });
@@ -147,7 +170,10 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     totalPnL, roi:totalBets>0?totalPnL/(totalBets*baseStake):0,
     finalBankroll:bankroll, initialBankroll, maxDrawdown:maxDD,
     longestWinStreak:longestWS, longestLoseStreak:longestLS,
-    avgOdds:totalBets>0?totalOddsSum/totalBets:0, equity,
+    avgOdds:totalBets>0?totalOddsSum/totalBets:0,
+    profitFactor:grossLosses>0?grossWins/grossLosses:null,
+    gainMoyen:totalBets>0?totalPnL/totalBets:0,
+    equity, stopped, stopReason,
     byBook: Object.entries(byBook).map(([book,s])=>({
       book, bets:s.bets, wins:s.wins,
       winRate:s.bets>0?s.wins/s.bets:0, pnl:s.pnl,
@@ -161,6 +187,47 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
   };
 }
 
+function ConstraintsPanel({ constraints, onChange }) {
+  const { enabled } = constraints;
+  return (
+    <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'12px 14px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:enabled?12:0 }}>
+        <span style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase' }}>Contraintes réelles</span>
+        <button onClick={()=>onChange({...constraints,enabled:!enabled})} style={{
+          padding:'4px 10px', borderRadius:5, fontSize:11, fontWeight:600, cursor:'pointer',
+          background:enabled?'#0f2d10':'#0d1117',
+          border:`1px solid ${enabled?'#3fb950':'#21262d'}`,
+          color:enabled?'#3fb950':'#484f58',
+        }}>{enabled?'✓ ON':'○ OFF'}</button>
+      </div>
+      {!enabled && <div style={{ fontSize:11, color:'#484f58', fontStyle:'italic', marginTop:6 }}>Activer pour simuler limites de mise, stop-loss, filtre cotes…</div>}
+      {enabled && (
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          {[
+            { key:'flatKellyFraction', label:'Fraction Kelly',          unit:'×', min:0.05, max:1,   step:0.05, help:'0.25 = quart-Kelly (stable), 1 = Kelly complet (dangereux)' },
+            { key:'maxStakePct',       label:'Mise max % bankroll',     unit:'%', min:1,    max:20,  step:0.5,  help:'Cap de la mise par rapport à la bankroll courante' },
+            { key:'minOdds',           label:'Cote minimale',           unit:'×', min:1.05, max:2.5, step:0.05, help:'Ignorer les paris sous cette cote' },
+            { key:'maxOdds',           label:'Cote maximale',           unit:'×', min:2,    max:20,  step:0.5,  help:'Ignorer les paris au-dessus de cette cote' },
+            { key:'stopLossPct',       label:'Stop-loss bankroll',      unit:'%', min:10,   max:80,  step:5,    help:'Arrêter si la bankroll perd X% de sa valeur initiale' },
+            { key:'maxConsecLosses',   label:'Pertes consécutives max', unit:'',  min:3,    max:30,  step:1,    help:'Arrêter après X pertes consécutives' },
+          ].map(({ key, label, unit, min, max, step, help }) => (
+            <div key={key}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
+                <span style={{ fontSize:11, color:'#8b949e' }}>{label}</span>
+                <span style={{ fontSize:12, color:'#f59e0b', fontFamily:'monospace', fontWeight:600 }}>{constraints[key]}{unit}</span>
+              </div>
+              <input type="range" min={min} max={max} step={step} value={constraints[key]}
+                onChange={e=>onChange({...constraints,[key]:parseFloat(e.target.value)})}
+                style={{ width:'100%', accentColor:'#f59e0b' }} />
+              <div style={{ fontSize:10, color:'#484f58' }}>{help}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function BettingSimulator({ matches, sharedOpcodes, threshModStat=-1, quantileMode=false }) {
   const { opcodes, stackHeight, isComplete, partialStack, results:fRes, push, undo, clear, loadOpcodes } =
     useFormula(matches, threshModStat, quantileMode);
@@ -168,6 +235,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
   const [params, setParams] = useState({
     seasons:[...ALL_SEASONS], bookmakers:['pinnacle','winamax_fr','betclic_fr'],
     strategy:'fixed', baseStake:10, activeFilters:[], confidence:'all',
+    constraints:{ ...DEFAULT_CONSTRAINTS },
   });
 
   useEffect(() => {
@@ -185,24 +253,29 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
   const pnlColor = result&&!result.empty?(result.totalPnL>=0?'#3fb950':'#f85149'):'#8b949e';
 
   return (
-    <div style={{ display:'flex', height:'100%' }}>
-      <div style={{ width:400, minWidth:400, borderRight:'1px solid #21262d', overflowY:'auto', padding:'20px 18px' }}>
+    <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>
+
+      {/* ── Left panel ── */}
+      <div style={{ width:400, minWidth:400, flexShrink:0, borderRight:'1px solid #21262d', overflowY:'auto', padding:'20px 18px' }}>
         <div style={{ marginBottom:16 }}>
           <div style={{ fontSize:18, fontWeight:700, color:'#e6edf3', marginBottom:2 }}>Betting Simulator</div>
-          <div style={{ fontSize:12, color:'#484f58' }}>{matches.filter(m=>m.has_odds).length} matchs avec cotes</div>
+          <div style={{ fontSize:12, color:'#484f58' }}>{matches.filter(m=>m.has_odds).length} matchs avec cotes · Résultats mis à jour automatiquement</div>
         </div>
+
         {sharedOpcodes?.length>0&&(
           <div style={{ marginBottom:14, background:'#0f2d10', border:'1px solid #3fb950', borderRadius:8, padding:'10px 14px' }}>
             <div style={{ fontSize:11, color:'#3fb950', fontWeight:600, marginBottom:6 }}>FORMULE DU PLAYGROUND</div>
             <div style={{ fontSize:11, color:'#8b949e', fontFamily:"'JetBrains Mono', monospace", marginBottom:8, wordBreak:'break-all' }}>{formulaToStr(sharedOpcodes)}</div>
-            <button onClick={()=>loadOpcodes(sharedOpcodes)} style={{ width:'100%', padding:'7px', borderRadius:6, fontSize:12, fontWeight:600, background:'#132b50', border:'1px solid #60a5fa', color:'#60a5fa', cursor:'pointer' }}>← Charger</button>
+            <button onClick={()=>loadOpcodes(sharedOpcodes)} style={{ width:'100%', padding:'7px', borderRadius:6, fontSize:12, fontWeight:600, background:'#132b50', border:'1px solid #60a5fa', color:'#60a5fa', cursor:'pointer' }}>← Charger cette formule</button>
           </div>
         )}
+
         <Calculator opcodes={opcodes} stackHeight={stackHeight} isComplete={isComplete}
           partialStack={partialStack} results={fRes} onPush={push} onUndo={undo} onClear={clear} onLoad={loadOpcodes}
           threshModStat={threshModStat} quantileMode={quantileMode} />
 
         <div style={{ marginTop:16, display:'flex', flexDirection:'column', gap:10 }}>
+
           {/* Saisons */}
           <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'12px 14px' }}>
             <div style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase', marginBottom:8 }}>Saisons</div>
@@ -239,7 +312,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
             </div>
           </div>
 
-          {/* Stratégie */}
+          {/* Stratégie + Mise */}
           <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'12px 14px' }}>
             <div style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase', marginBottom:8 }}>Stratégie</div>
             <div style={{ display:'flex', gap:6, marginBottom:8 }}>
@@ -252,25 +325,35 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
                 }}>{l}</button>
               ))}
             </div>
+            {params.strategy==='kelly'&&(
+              <div style={{ fontSize:11, color:'#f59e0b', marginBottom:8 }}>
+                ⚠️ Kelly utilise Pinnacle no-vig comme référence. Active les contraintes pour éviter les explosions.
+              </div>
+            )}
+            <div style={{ fontSize:11, color:'#484f58', marginBottom:6 }}>
+              {params.strategy==='fixed'?'Mise par pari (€) — bankroll = 100×':'Bankroll initiale (€)'}
+            </div>
             <input type="number" min={1} value={params.baseStake}
               onChange={e=>set('baseStake',Math.max(1,Number(e.target.value)))}
               style={{ width:'100%', padding:'7px 10px', borderRadius:6, fontSize:13,
                 background:'#161b22', border:'1px solid #30363d', color:'#e6edf3',
                 fontFamily:"'JetBrains Mono', monospace" }} />
-            <div style={{ fontSize:10, color:'#484f58', marginTop:4 }}>
-              {params.strategy==='fixed'?'Mise par pari (€)':'Bankroll initiale (€)'}
-            </div>
           </div>
 
-          {/* Filtres */}
+          {/* Filtres matchs + confiance */}
           <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'12px 14px' }}>
             <div style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase', marginBottom:8, display:'flex', justifyContent:'space-between' }}>
-              <span>Filtres (AND)</span>
-              {params.activeFilters.length>0&&<button onClick={()=>set('activeFilters',[])} style={{ fontSize:10, color:'#f85149', background:'none', border:'none', cursor:'pointer' }}>Effacer</button>}
+              <span>Filtres de matchs (AND)</span>
+              {params.activeFilters.length>0&&<button onClick={()=>set('activeFilters',[])} style={{ fontSize:10, color:'#f85149', background:'none', border:'none', cursor:'pointer' }}>Tout effacer</button>}
             </div>
+            {params.activeFilters.length>0&&(
+              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:8 }}>
+                {params.activeFilters.length} filtre(s) actif(s) — les matchs doivent satisfaire TOUS les filtres
+              </div>
+            )}
             {FILTER_CATS.map(cat=>(
               <div key={cat} style={{ marginBottom:6 }}>
-                <div style={{ fontSize:10, color:'#484f58', fontWeight:600, marginBottom:3, textTransform:'uppercase' }}>{cat}</div>
+                <div style={{ fontSize:10, color:'#484f58', fontWeight:600, marginBottom:3, textTransform:'uppercase', letterSpacing:1 }}>{cat}</div>
                 <div style={{ display:'flex', flexWrap:'wrap', gap:3 }}>
                   {MATCH_FILTERS.filter(f=>f.cat===cat).map(f=>{
                     const active=params.activeFilters.includes(f.id);
@@ -287,7 +370,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               </div>
             ))}
             <div style={{ marginTop:8, borderTop:'1px solid #21262d', paddingTop:8 }}>
-              <div style={{ fontSize:11, color:'#484f58', marginBottom:6 }}>Confiance</div>
+              <div style={{ fontSize:11, color:'#484f58', marginBottom:6 }}>Confiance de la formule</div>
               <div style={{ display:'flex', gap:5 }}>
                 {[['all','Tous'],['top25','Top 25%'],['top10','Top 10%']].map(([k,l])=>(
                   <button key={k} onClick={()=>set('confidence',k)} style={{
@@ -300,10 +383,14 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               </div>
             </div>
           </div>
+
+          {/* Contraintes réelles */}
+          <ConstraintsPanel constraints={params.constraints} onChange={c=>set('constraints',c)} />
+
         </div>
       </div>
 
-      {/* Résultats */}
+      {/* ── Right panel: Results ── */}
       <div style={{ flex:1, overflowY:'auto', padding:'20px 24px' }}>
         {!isComplete ? (
           <div style={{ color:'#484f58', textAlign:'center', padding:'80px 20px', fontSize:14 }}>
@@ -315,13 +402,21 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
           </div>
         ) : (
           <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-            {/* KPIs */}
+
+            {/* Stop warning */}
+            {result.stopped && (
+              <div style={{ background:'#1a0d00', border:'1px solid #f59e0b', borderRadius:8, padding:'10px 16px', fontSize:12, color:'#f59e0b' }}>
+                ⚠️ Simulation arrêtée : <strong>{result.stopReason}</strong>
+              </div>
+            )}
+
+            {/* KPIs ligne 1 — 4 colonnes */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
               {[
-                { label:'Paris joués', value:result.totalBets.toLocaleString('fr-FR'), color:'#e6edf3', sub:`${result.totalWins} gagnés` },
-                { label:'Win rate', value:pct(result.winRate), color:roiC(result.winRate-0.6426), sub:'baseline 64.26%' },
-                { label:'ROI', value:`${sign(result.roi)}${pct(result.roi)}`, color:roiC(result.roi), sub:'par pari' },
-                { label:'P&L total', value:eur(result.totalPnL), color:pnlColor, sub:`vs ${result.initialBankroll.toFixed(0)}€` },
+                { label:'Paris joués',  value:result.totalBets.toLocaleString('fr-FR'), color:'#e6edf3',        sub:`${result.totalWins} gagnés` },
+                { label:'Win rate',     value:pct(result.winRate),                      color:roiC(result.winRate-0.6426), sub:'baseline 64.26%' },
+                { label:'ROI',          value:`${sign(result.roi)}${pct(result.roi)}`, color:roiC(result.roi), sub:'par pari vs mise base' },
+                { label:'P&L total',    value:eur(result.totalPnL),                     color:result.totalPnL>=0?'#3fb950':'#f85149', sub:`vs ${result.initialBankroll.toFixed(0)}€` },
               ].map(({ label, value, color, sub }) => (
                 <div key={label} style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'14px 16px' }}>
                   <div style={{ fontSize:11, color:'#484f58', marginBottom:5 }}>{label}</div>
@@ -331,19 +426,39 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               ))}
             </div>
 
-            {/* Stats avancées */}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
+            {/* KPIs ligne 2 — 5 colonnes */}
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10 }}>
               {[
-                { label:'Bankroll finale', value:`${result.finalBankroll.toFixed(2)}€`, color:pnlColor },
-                { label:'Max Drawdown', value:`-${pct(result.maxDrawdown,1)}`, color:result.maxDrawdown>0.3?'#f85149':result.maxDrawdown>0.15?'#f59e0b':'#8b949e' },
-                { label:'Série + max', value:`${result.longestWinStreak}`, color:'#3fb950' },
-                { label:'Série − max', value:`${result.longestLoseStreak}`, color:'#f85149' },
+                { label:'Bankroll finale',     value:`${result.finalBankroll.toFixed(2)}€`,        color:result.totalPnL>=0?'#3fb950':'#f85149' },
+                { label:'Max Drawdown',        value:`-${pct(result.maxDrawdown,1)}`,              color:result.maxDrawdown>0.3?'#f85149':result.maxDrawdown>0.15?'#f59e0b':'#8b949e' },
+                { label:'Plus longue série +', value:`${result.longestWinStreak} consécutifs`,     color:'#3fb950' },
+                { label:'Plus longue série −', value:`${result.longestLoseStreak} consécutifs`,    color:'#f85149' },
+                { label:'Cote moyenne',        value:`×${result.avgOdds.toFixed(3)}`,              color:'#8b949e' },
               ].map(({ label, value, color }) => (
                 <div key={label} style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:8, padding:'10px 12px' }}>
                   <div style={{ fontSize:10, color:'#484f58', marginBottom:4 }}>{label}</div>
-                  <div style={{ fontSize:16, fontWeight:700, color, fontFamily:'monospace' }}>{value}</div>
+                  <div style={{ fontSize:15, fontWeight:700, color, fontFamily:'monospace' }}>{value}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Profit Factor + Gain moyen */}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:8, padding:'10px 14px' }}>
+                <div style={{ fontSize:10, color:'#484f58', marginBottom:4 }}>Profit Factor</div>
+                <div style={{ fontSize:18, fontWeight:700, fontFamily:'monospace',
+                  color:result.profitFactor==null?'#484f58':result.profitFactor>1.5?'#3fb950':result.profitFactor>1?'#f59e0b':'#f85149' }}>
+                  {result.profitFactor!=null?result.profitFactor.toFixed(2):'—'}
+                </div>
+                <div style={{ fontSize:10, color:'#484f58', marginTop:2 }}>Gains bruts / Pertes brutes · &gt;1.5 = bon</div>
+              </div>
+              <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:8, padding:'10px 14px' }}>
+                <div style={{ fontSize:10, color:'#484f58', marginBottom:4 }}>Gain moyen par pari</div>
+                <div style={{ fontSize:18, fontWeight:700, fontFamily:'monospace', color:result.totalPnL>=0?'#3fb950':'#f85149' }}>
+                  {result.totalBets>0?eur(result.gainMoyen):'—'}
+                </div>
+                <div style={{ fontSize:10, color:'#484f58', marginTop:2 }}>En € absolus par pari joué</div>
+              </div>
             </div>
 
             {/* Equity curve */}
@@ -361,11 +476,42 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
                   <XAxis dataKey="date" tick={{ fontSize:10, fill:'#8b949e' }} interval={Math.floor(result.equity.length/8)} />
                   <YAxis tick={{ fontSize:10, fill:'#8b949e' }} tickFormatter={v=>`${v.toFixed(0)}€`} width={70} />
                   <Tooltip contentStyle={TOOLTIP_S} formatter={v=>[`${v.toFixed(2)}€`,'Bankroll']} />
-                  <ReferenceLine y={result.initialBankroll} stroke="#484f58" strokeDasharray="4 2" />
+                  <ReferenceLine y={result.initialBankroll} stroke="#484f58" strokeDasharray="4 2"
+                    label={{ value:'Initial', fill:'#484f58', fontSize:10, position:'right' }} />
                   <Area type="monotone" dataKey="value" stroke={pnlColor} strokeWidth={2} fill="url(#bankGrad)" dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+
+            {/* Par bookmaker */}
+            {result.byBook.length>1&&(
+              <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:12, overflow:'hidden' }}>
+                <div style={{ padding:'12px 20px', borderBottom:'1px solid #21262d', fontSize:13, fontWeight:600, color:'#e6edf3' }}>Par bookmaker</div>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                  <thead>
+                    <tr style={{ borderBottom:'1px solid #21262d' }}>
+                      {['Bookmaker','Paris','Win rate','P&L','ROI'].map(h=>(
+                        <th key={h} style={{ padding:'7px 12px', textAlign:h==='Bookmaker'?'left':'right', color:'#484f58', fontSize:11 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.byBook.map((bk,i)=>(
+                      <tr key={bk.book} style={{ borderTop:'1px solid #161b22', background:i%2===0?'#0a0e18':'transparent' }}>
+                        <td style={{ padding:'6px 12px', color:'#e6edf3', fontSize:12 }}>
+                          {bookLabel(bk.book)}
+                          {SHARP_BOOKS.has(bk.book)&&<span style={{ marginLeft:6, fontSize:9, background:'#132b50', color:'#60a5fa', padding:'1px 5px', borderRadius:3, fontWeight:700 }}>SHARP</span>}
+                        </td>
+                        <td style={{ padding:'6px 12px', textAlign:'right', color:'#8b949e' }}>{bk.bets}</td>
+                        <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', color:roiC(bk.winRate-0.6426) }}>{pct(bk.winRate)}</td>
+                        <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', color:bk.pnl>=0?'#3fb950':'#f85149' }}>{eur(bk.pnl)}</td>
+                        <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', fontWeight:600, color:roiC(bk.roi) }}>{sign(bk.roi)}{pct(bk.roi)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Par saison */}
             <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:12, overflow:'hidden' }}>
@@ -396,6 +542,9 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               <div style={{ fontSize:11, color:'#484f58', lineHeight:1.6 }}>
                 <span style={{ color:'#f59e0b', fontWeight:600 }}>⚠️ In-sample : </span>
                 Threshold optimisé sur le même dataset. Résultats optimistes — valider sur futures données.
+                {' '}Bankroll = 100 × mise de base (fixe) ou = mise de base (Kelly).
+                {' '}<span style={{ color:'#3fb950' }}>Profit Factor &gt; 1.5</span> et
+                {' '}<span style={{ color:'#f85149' }}>Max Drawdown &lt; 20%</span> = signaux de robustesse.
               </div>
             </div>
           </div>

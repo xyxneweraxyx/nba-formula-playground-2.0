@@ -225,6 +225,41 @@ function RankingView({ results, onSelect, selectedId, sortBy, onSortChange }) {
   );
 }
 
+
+function GridView({ results, onSelect, selectedId }) {
+  const byCat = useMemo(() => {
+    const map = {};
+    results.forEach(({ type, result }) => {
+      if (!map[type.category]) map[type.category] = [];
+      map[type.category].push({ type, result });
+    });
+    return map;
+  }, [results]);
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+      {CATEGORIES.map(cat => {
+        const items = byCat[cat] || [];
+        if (!items.length) return null;
+        const color = CAT_COLORS[cat] || '#8b949e';
+        return (
+          <div key={cat}>
+            <div style={{ fontSize:11, fontWeight:700, color, letterSpacing:2, textTransform:'uppercase', marginBottom:10, display:'flex', alignItems:'center', gap:8 }}>
+              <div style={{ width:12, height:12, borderRadius:3, background:color }} />
+              {cat} ({items.length})
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(210px, 1fr))', gap:8 }}>
+              {items.map(({ type, result }) => (
+                <TypeCard key={type.id} type={type} result={result} onClick={onSelect} selected={selectedId === type.id} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function EdgeAnalyser({ matches, sharedOpcodes, threshModStat=-1, quantileMode=false }) {
   const { opcodes, stackHeight, isComplete, partialStack, results:fRes, push, undo, clear, loadOpcodes } =
     useFormula(matches, threshModStat, quantileMode);
@@ -234,6 +269,7 @@ export default function EdgeAnalyser({ matches, sharedOpcodes, threshModStat=-1,
   const [selectedId, setSelectedId] = useState(null);
   const [sortBy,     setSortBy]     = useState('edge');
   const [catFilter,  setCatFilter]  = useState('Tout');
+  const [viewMode,   setViewMode]   = useState('ranking');
 
   useEffect(() => {
     if (sharedOpcodes?.length > 0) loadOpcodes(sharedOpcodes);
@@ -307,6 +343,16 @@ export default function EdgeAnalyser({ matches, sharedOpcodes, threshModStat=-1,
           <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
             {/* Toolbar */}
             <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+              <div style={{ display:'flex', gap:4 }}>
+                {[['ranking','📋 Classement'],['grid','🔲 Grille']].map(([k,label])=>(
+                  <button key={k} onClick={()=>setViewMode(k)} style={{
+                    padding:'5px 12px', borderRadius:5, fontSize:12, fontWeight:600, cursor:'pointer',
+                    background:viewMode===k?'#132b50':'#0d1117',
+                    border:`1px solid ${viewMode===k?'#60a5fa':'#21262d'}`,
+                    color:viewMode===k?'#60a5fa':'#8b949e',
+                  }}>{label}</button>
+                ))}
+              </div>
               <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
                 {['Tout',...CATEGORIES].map(cat=>{
                   const color=cat==='Tout'?'#8b949e':(CAT_COLORS[cat]||'#8b949e');
@@ -322,7 +368,10 @@ export default function EdgeAnalyser({ matches, sharedOpcodes, threshModStat=-1,
                 })}
               </div>
             </div>
-            <RankingView results={filtered} onSelect={setSelectedId} selectedId={selectedId} sortBy={sortBy} onSortChange={setSortBy} />
+            {viewMode==='ranking'
+              ? <RankingView results={filtered} onSelect={setSelectedId} selectedId={selectedId} sortBy={sortBy} onSortChange={setSortBy} />
+              : <GridView    results={filtered} onSelect={setSelectedId} selectedId={selectedId} />
+            }
             {selType&&selResult&&(
               <div style={{ borderTop:'1px solid #21262d', paddingTop:16 }}>
                 <TypeDetail type={selType} result={selResult} />

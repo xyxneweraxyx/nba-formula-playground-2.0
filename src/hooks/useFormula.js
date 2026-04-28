@@ -83,6 +83,19 @@ export default function useFormula(matches, threshModStat = -1, quantileMode = f
       return idx.length ? { range:`${lo===Infinity?'200+':lo}-${hi===Infinity?'+':hi}`, score:seg(idx), n:idx.length } : null;
     }).filter(Boolean);
 
+    // ── Progression dans la saison (proxy: A_W_s buckets) ───────────────────
+    // V3 n'a pas gamesPlayed, on utilise max(A_W_s,B_W_s) comme proxy
+    const wsBuckets = [[0,9],[10,19],[20,29],[30,39],[40,49],[50,99]];
+    const byGameNum = wsBuckets.map(([lo,hi]) => {
+      const idx = idxWhere(m => {
+        const ws = Math.max(m.stats[6], m.stats[7]);
+        return ws >= lo && ws <= hi;
+      });
+      return idx.length >= 30
+        ? { range: lo === 50 ? '50+' : `${lo}-${hi}`, score: seg(idx), n: idx.length }
+        : null;
+    }).filter(Boolean);
+
     // ── Distribution of outputs ───────────────────────────────────────────────
     let minO=Infinity, maxO=-Infinity;
     for (const v of outputs) { if(v<minO) minO=v; if(v>maxO) maxO=v; }
@@ -163,7 +176,7 @@ export default function useFormula(matches, threshModStat = -1, quantileMode = f
         medium:   { score:seg(mediumIdx),   n:mediumIdx.length },
         mismatch: { score:seg(mismatchIdx), n:mismatchIdx.length },
       },
-      byMonth, byEloDiff,
+      byMonth, byEloDiff, byGameNum,
       // Charts
       distribution, confidence,
       // Risk stats
