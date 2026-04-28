@@ -5,15 +5,16 @@ import useFormula from '../hooks/useFormula';
 import Calculator from './Calculator';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
-  Tooltip, CartesianGrid, ReferenceLine,
+  Tooltip, CartesianGrid, ReferenceLine, BarChart, Bar, Cell,
 } from 'recharts';
 
 const ALL_SEASONS = ['2021-22','2022-23','2023-24','2024-25','2025-26'];
 const TOOLTIP_S   = { background:'#161b22', border:'1px solid #30363d', borderRadius:8, fontSize:12, color:'#e6edf3' };
 const pct  = (v, d=2) => v==null ? '—' : `${(v*100).toFixed(d)}%`;
-const sign = v => v>=0?'+':'';
+const sign = v => v>=0 ? '+' : '';
 const eur  = v => `${sign(v)}${v.toFixed(2)}€`;
 const roiC = v => v>0.05?'#3fb950':v>0?'#56d364':v>-0.03?'#f59e0b':'#f85149';
+const pnlC = v => v>0 ? '#3fb950' : v<0 ? '#f85149' : '#8b949e';
 
 const ALL_BOOKS = [
   'pinnacle','betfair_ex_eu','matchbook','betfair',
@@ -25,31 +26,26 @@ const ALL_BOOKS = [
 ];
 
 const MATCH_FILTERS = [
-  { id:'gap_close',    label:'Serrés (|ΔMOV_s|<3)',   cat:'Niveau',   fn:m=>Math.abs(m.stats[12]-m.stats[13])<3 },
-  { id:'gap_medium',   label:'Équilibrés (3-8)',       cat:'Niveau',   fn:m=>{const g=Math.abs(m.stats[12]-m.stats[13]);return g>=3&&g<8;} },
-  { id:'gap_mismatch', label:'Mismatch (≥8)',          cat:'Niveau',   fn:m=>Math.abs(m.stats[12]-m.stats[13])>=8 },
-  { id:'h_b2b',        label:'Home B2B (rest=1)',      cat:'Repos',    fn:m=>m.stats[0]===1 },
-  { id:'a_b2b',        label:'Away B2B (rest=1)',      cat:'Repos',    fn:m=>m.stats[1]===1 },
-  { id:'h_b2b_a_rest', label:'Home B2B + Away reposé', cat:'Repos',   fn:m=>m.stats[0]===1&&m.stats[1]>=2 },
-  { id:'h_streak3',    label:'Home série+ (≥3)',       cat:'Momentum', fn:m=>m.stats[4]>=3 },
-  { id:'h_streak_neg', label:'Home série- (≤-3)',      cat:'Momentum', fn:m=>m.stats[4]<=-3 },
-  { id:'a_streak3',    label:'Away série+ (≥3)',       cat:'Momentum', fn:m=>m.stats[5]>=3 },
-  { id:'p_heavy_h',    label:'Favori home >70%',       cat:'Marché',   fn:m=>m.no_vig_ref?.home>0.70 },
-  { id:'p_coin',       label:'Coin flip (45-55%)',     cat:'Marché',   fn:m=>{const p=m.no_vig_ref?.home;return p&&p>=0.45&&p<=0.55;} },
-  { id:'p_heavy_a',    label:'Favori away >70%',       cat:'Marché',   fn:m=>m.no_vig_ref?.home<0.30 },
-  { id:'elo_gt100',    label:'Elo gap > 100',          cat:'Elo',      fn:m=>Math.abs(m.stats[14]-m.stats[15])>100 },
-  { id:'elo_lt50',     label:'Elo gap < 50',           cat:'Elo',      fn:m=>Math.abs(m.stats[14]-m.stats[15])<50 },
+  { id:'gap_close',    label:'Serrés (|ΔMOV_s|<3)',    cat:'Niveau',   fn:m=>Math.abs(m.stats[12]-m.stats[13])<3 },
+  { id:'gap_medium',   label:'Équilibrés (3-8)',        cat:'Niveau',   fn:m=>{const g=Math.abs(m.stats[12]-m.stats[13]);return g>=3&&g<8;} },
+  { id:'gap_mismatch', label:'Mismatch (≥8)',           cat:'Niveau',   fn:m=>Math.abs(m.stats[12]-m.stats[13])>=8 },
+  { id:'h_b2b',        label:'Home B2B (rest=1)',       cat:'Repos',    fn:m=>m.stats[0]===1 },
+  { id:'a_b2b',        label:'Away B2B (rest=1)',       cat:'Repos',    fn:m=>m.stats[1]===1 },
+  { id:'h_b2b_a_rest', label:'Home B2B + Away reposé', cat:'Repos',    fn:m=>m.stats[0]===1&&m.stats[1]>=2 },
+  { id:'h_streak3',    label:'Home série+ (≥3)',        cat:'Momentum', fn:m=>m.stats[4]>=3 },
+  { id:'h_streak_neg', label:'Home série- (≤-3)',       cat:'Momentum', fn:m=>m.stats[4]<=-3 },
+  { id:'a_streak3',    label:'Away série+ (≥3)',        cat:'Momentum', fn:m=>m.stats[5]>=3 },
+  { id:'p_heavy_h',    label:'Favori home >70%',        cat:'Marché',   fn:m=>m.no_vig_ref?.home>0.70 },
+  { id:'p_coin',       label:'Coin flip (45-55%)',      cat:'Marché',   fn:m=>{const p=m.no_vig_ref?.home;return p&&p>=0.45&&p<=0.55;} },
+  { id:'p_heavy_a',    label:'Favori away >70%',        cat:'Marché',   fn:m=>m.no_vig_ref?.home<0.30 },
+  { id:'elo_gt100',    label:'Elo gap > 100',           cat:'Elo',      fn:m=>Math.abs(m.stats[14]-m.stats[15])>100 },
+  { id:'elo_lt50',     label:'Elo gap < 50',            cat:'Elo',      fn:m=>Math.abs(m.stats[14]-m.stats[15])<50 },
 ];
 const FILTER_CATS = [...new Set(MATCH_FILTERS.map(f=>f.cat))];
 
 const DEFAULT_CONSTRAINTS = {
-  enabled:           false,
-  maxStakePct:       5,
-  maxOdds:           5.0,
-  minOdds:           1.25,
-  stopLossPct:       50,
-  maxConsecLosses:   15,
-  flatKellyFraction: 0.25,
+  enabled:false, maxStakePct:5, maxOdds:5.0, minOdds:1.25,
+  stopLossPct:50, maxConsecLosses:15, flatKellyFraction:0.25,
 };
 
 function predictOne(output, match, optimResult) {
@@ -58,8 +54,20 @@ function predictOne(output, match, optimResult) {
   return output > optimResult.threshold;
 }
 
+// ── ISO week helper ───────────────────────────────────────────────────────────
+function isoWeek(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  const day = d.getDay() || 7;
+  d.setDate(d.getDate() + 4 - day);
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  return `${d.getFullYear()}-W${String(week).padStart(2,'0')}`;
+}
+
+// ── Core simulation ───────────────────────────────────────────────────────────
 function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
-  const { seasons, bookmakers, strategy, baseStake, activeFilters, confidence, constraints } = params;
+  const { seasons, bookmakers, strategy, initialBankroll, stakePerBet,
+          activeFilters, confidence, constraints } = params;
   if (!opcodes.length || !bookmakers.length || !seasons.length) return null;
 
   const optimResult = optimize(opcodes, matches, threshModStat, quantileMode);
@@ -71,7 +79,6 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     if (!bookmakers.some(b=>m.odds[b])) return false;
     return true;
   }).sort((a,b)=>a.date.localeCompare(b.date));
-
   if (!pool.length) return { empty:true };
 
   if (activeFilters.length>0) {
@@ -93,7 +100,6 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
   if (!pool.length) return { empty:true };
 
   const C = constraints?.enabled ? constraints : DEFAULT_CONSTRAINTS;
-  const initialBankroll = strategy==='kelly' ? baseStake : baseStake*100;
   let bankroll=initialBankroll, peak=initialBankroll, maxDD=0;
   const equity=[{ date:'Départ', value:bankroll }];
   let totalBets=0, totalWins=0, totalPnL=0, consecLosses=0;
@@ -102,6 +108,11 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
   let stopped=false, stopReason='';
   const byBook={}, bySeason={};
   bookmakers.forEach(b=>{byBook[b]={bets:0,wins:0,pnl:0};});
+
+  // Per-match detail log
+  const matchLog = [];
+  // Per-date aggregation
+  const byDate = {};
 
   pool.forEach((match,i) => {
     if (stopped) return;
@@ -117,6 +128,13 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     const correct  = predHome===(match.a_wins===1);
     if (!bySeason[match.season]) bySeason[match.season]={bets:0,wins:0,pnl:0};
 
+    const date = match.date;
+    if (!byDate[date]) byDate[date]={date,bets:0,wins:0,pnl:0,matches:[]};
+
+    // Build per-book bets for this match
+    const matchBets = [];
+    let matchPnl = 0, matchBetCount = 0;
+
     bookmakers.forEach(book => {
       if (!match.odds?.[book]) return;
       const betOdds = predHome?match.odds[book].home:match.odds[book].away;
@@ -124,7 +142,7 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
 
       let stake;
       if (strategy==='fixed') {
-        stake = baseStake;
+        stake = stakePerBet;
       } else {
         const p = match.no_vig_ref?(predHome?match.no_vig_ref.home:match.no_vig_ref.away):0.52;
         const b = betOdds-1;
@@ -138,24 +156,45 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
       stake = Math.min(stake, bankroll*0.95);
       if (stake<=0||bankroll<=0) return;
 
-      totalBets++; totalOddsSum+=betOdds;
+      totalBets++; totalOddsSum+=betOdds; matchBetCount++;
       byBook[book].bets++; bySeason[match.season].bets++;
+      byDate[date].bets++;
+
+      const pnl = correct ? stake*(betOdds-1) : -stake;
+      matchPnl += pnl;
 
       if (correct) {
-        const profit=stake*(betOdds-1);
-        totalWins++; totalPnL+=profit; bankroll+=profit;
-        grossWins+=profit;
-        byBook[book].wins++; byBook[book].pnl+=profit;
-        bySeason[match.season].wins++; bySeason[match.season].pnl+=profit;
+        totalWins++; totalPnL+=pnl; bankroll+=pnl; grossWins+=pnl;
+        byBook[book].wins++; byBook[book].pnl+=pnl;
+        bySeason[match.season].wins++; bySeason[match.season].pnl+=pnl;
+        byDate[date].wins++; byDate[date].pnl+=pnl;
         consecLosses=0; curWS++; curLS=0; longestWS=Math.max(longestWS,curWS);
       } else {
-        totalPnL-=stake; bankroll-=stake;
-        grossLosses+=stake;
-        byBook[book].pnl-=stake; bySeason[match.season].pnl-=stake;
+        totalPnL+=pnl; bankroll+=pnl; grossLosses+=Math.abs(pnl);
+        byBook[book].pnl+=pnl;
+        bySeason[match.season].pnl+=pnl;
+        byDate[date].pnl+=pnl;
         consecLosses++; curLS++; curWS=0; longestLS=Math.max(longestLS,curLS);
       }
       bankroll=Math.max(bankroll,0);
+
+      matchBets.push({ book, betOdds, stake, pnl, correct });
     });
+
+    if (matchBetCount > 0) {
+      const matchEntry = {
+        date, season: match.season,
+        home: match.home_abbr, away: match.away_abbr,
+        formulaOutput: +out.toFixed(4),
+        threshold: +optimResult.threshold.toFixed(4),
+        predHome, actualHomeWin: match.a_wins===1, correct,
+        pinnacleHome: match.no_vig_ref?.home ?? null,
+        bets: matchBets, pnl: matchPnl,
+        eloA: +match.stats[14].toFixed(0), eloB: +match.stats[15].toFixed(0),
+      };
+      matchLog.push(matchEntry);
+      byDate[date].matches.push(matchEntry);
+    }
 
     if (bankroll>peak) peak=bankroll;
     const dd=(peak-bankroll)/peak;
@@ -164,29 +203,42 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
       equity.push({ date:match.date.slice(0,7), value:Math.round(bankroll*100)/100 });
   });
 
+  // Build week aggregations
+  const byWeek = {};
+  Object.values(byDate).forEach(d => {
+    const wk = isoWeek(d.date);
+    if (!byWeek[wk]) byWeek[wk]={week:wk,bets:0,wins:0,pnl:0};
+    byWeek[wk].bets+=d.bets; byWeek[wk].wins+=d.wins; byWeek[wk].pnl+=d.pnl;
+  });
+
+  const dateArr = Object.values(byDate).sort((a,b)=>a.date.localeCompare(b.date));
+  const weekArr = Object.values(byWeek).sort((a,b)=>a.week.localeCompare(b.week));
+
   return {
     totalBets, totalWins,
     winRate:totalBets>0?totalWins/totalBets:0,
-    totalPnL, roi:totalBets>0?totalPnL/(totalBets*baseStake):0,
+    totalPnL, roi:totalBets>0?totalPnL/(totalBets*stakePerBet):0,
     finalBankroll:bankroll, initialBankroll, maxDrawdown:maxDD,
     longestWinStreak:longestWS, longestLoseStreak:longestLS,
     avgOdds:totalBets>0?totalOddsSum/totalBets:0,
     profitFactor:grossLosses>0?grossWins/grossLosses:null,
     gainMoyen:totalBets>0?totalPnL/totalBets:0,
-    equity, stopped, stopReason,
+    equity, stopped, stopReason, matchLog,
+    byDate: dateArr, byWeek: weekArr,
     byBook: Object.entries(byBook).map(([book,s])=>({
       book, bets:s.bets, wins:s.wins,
       winRate:s.bets>0?s.wins/s.bets:0, pnl:s.pnl,
-      roi:s.bets>0?s.pnl/(s.bets*baseStake):0,
+      roi:s.bets>0?s.pnl/(s.bets*stakePerBet):0,
     })).filter(b=>b.bets>0).sort((a,b)=>b.roi-a.roi),
     bySeason: Object.entries(bySeason).map(([season,s])=>({
       season, bets:s.bets, wins:s.wins,
       winRate:s.bets>0?s.wins/s.bets:0, pnl:s.pnl,
-      roi:s.bets>0?s.pnl/(s.bets*baseStake):0,
+      roi:s.bets>0?s.pnl/(s.bets*stakePerBet):0,
     })).sort((a,b)=>a.season.localeCompare(b.season)),
   };
 }
 
+// ── Constraints panel ────────────────────────────────────────────────────────
 function ConstraintsPanel({ constraints, onChange }) {
   const { enabled } = constraints;
   return (
@@ -200,16 +252,16 @@ function ConstraintsPanel({ constraints, onChange }) {
           color:enabled?'#3fb950':'#484f58',
         }}>{enabled?'✓ ON':'○ OFF'}</button>
       </div>
-      {!enabled && <div style={{ fontSize:11, color:'#484f58', fontStyle:'italic', marginTop:6 }}>Activer pour simuler limites de mise, stop-loss, filtre cotes…</div>}
+      {!enabled && <div style={{ fontSize:11, color:'#484f58', fontStyle:'italic', marginTop:6 }}>Activer pour limites de mise, stop-loss, filtre cotes…</div>}
       {enabled && (
         <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
           {[
-            { key:'flatKellyFraction', label:'Fraction Kelly',          unit:'×', min:0.05, max:1,   step:0.05, help:'0.25 = quart-Kelly (stable), 1 = Kelly complet (dangereux)' },
-            { key:'maxStakePct',       label:'Mise max % bankroll',     unit:'%', min:1,    max:20,  step:0.5,  help:'Cap de la mise par rapport à la bankroll courante' },
-            { key:'minOdds',           label:'Cote minimale',           unit:'×', min:1.05, max:2.5, step:0.05, help:'Ignorer les paris sous cette cote' },
-            { key:'maxOdds',           label:'Cote maximale',           unit:'×', min:2,    max:20,  step:0.5,  help:'Ignorer les paris au-dessus de cette cote' },
-            { key:'stopLossPct',       label:'Stop-loss bankroll',      unit:'%', min:10,   max:80,  step:5,    help:'Arrêter si la bankroll perd X% de sa valeur initiale' },
-            { key:'maxConsecLosses',   label:'Pertes consécutives max', unit:'',  min:3,    max:30,  step:1,    help:'Arrêter après X pertes consécutives' },
+            { key:'flatKellyFraction', label:'Fraction Kelly',          unit:'×', min:0.05, max:1,   step:0.05, help:'0.25 = quart-Kelly' },
+            { key:'maxStakePct',       label:'Mise max % bankroll',     unit:'%', min:1,    max:20,  step:0.5,  help:'Cap par rapport à la bankroll' },
+            { key:'minOdds',           label:'Cote minimale',           unit:'×', min:1.05, max:2.5, step:0.05, help:'Ignorer sous cette cote' },
+            { key:'maxOdds',           label:'Cote maximale',           unit:'×', min:2,    max:20,  step:0.5,  help:'Ignorer au-dessus' },
+            { key:'stopLossPct',       label:'Stop-loss bankroll',      unit:'%', min:10,   max:80,  step:5,    help:'Arrêter si perte X% de l\'initiale' },
+            { key:'maxConsecLosses',   label:'Pertes consécutives max', unit:'',  min:3,    max:100,  step:1,    help:'Arrêter après X pertes consécutives' },
           ].map(({ key, label, unit, min, max, step, help }) => (
             <div key={key}>
               <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
@@ -228,14 +280,268 @@ function ConstraintsPanel({ constraints, onChange }) {
   );
 }
 
+// ── Day drilldown modal ───────────────────────────────────────────────────────
+function DayDrilldown({ date, matches: dayMatches, onClose }) {
+  const totalPnl = dayMatches.reduce((s,m)=>s+m.pnl,0);
+  const totalBets = dayMatches.reduce((s,m)=>s+m.bets.length,0);
+  const wins = dayMatches.reduce((s,m)=>s+(m.correct?1:0),0);
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:32,
+    }} onClick={onClose}>
+      <div style={{
+        background:'#0d1117', border:'1px solid #30363d', borderRadius:14,
+        width:'min(900px,90vw)', maxHeight:'85vh', display:'flex', flexDirection:'column',
+        overflow:'hidden',
+      }} onClick={e=>e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ padding:'16px 20px', borderBottom:'1px solid #21262d', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div>
+            <div style={{ fontSize:16, fontWeight:700, color:'#e6edf3' }}>📅 {date}</div>
+            <div style={{ fontSize:12, color:'#484f58', marginTop:2 }}>
+              {dayMatches.length} matchs · {totalBets} paris · {wins}/{dayMatches.length} prédictions correctes
+              <span style={{ marginLeft:12, fontWeight:600, color:pnlC(totalPnl) }}>{eur(totalPnl)}</span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'1px solid #30363d', borderRadius:6, color:'#8b949e', padding:'6px 12px', cursor:'pointer', fontSize:13 }}>✕ Fermer</button>
+        </div>
+
+        {/* Match list */}
+        <div style={{ overflowY:'auto', padding:'16px 20px', display:'flex', flexDirection:'column', gap:12 }}>
+          {dayMatches.map((m, i) => (
+            <div key={i} style={{
+              background:'#0a0e18', border:`1px solid ${m.correct?'#1a3a1a':'#3a1a1a'}`,
+              borderRadius:10, padding:'14px 16px',
+            }}>
+              {/* Match header */}
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
+                <div>
+                  <div style={{ fontSize:14, fontWeight:700, color:'#e6edf3', marginBottom:4 }}>
+                    <span style={{ color:'#60a5fa' }}>{m.home}</span>
+                    <span style={{ color:'#484f58', margin:'0 8px' }}>vs</span>
+                    <span style={{ color:'#fb923c' }}>{m.away}</span>
+                  </div>
+                  <div style={{ display:'flex', gap:12, fontSize:11, color:'#484f58' }}>
+                    <span>Elo home: <span style={{ color:'#8b949e', fontFamily:'monospace' }}>{m.eloA}</span></span>
+                    <span>Elo away: <span style={{ color:'#8b949e', fontFamily:'monospace' }}>{m.eloB}</span></span>
+                    {m.pinnacleHome && <span>Pinnacle home: <span style={{ color:'#8b949e', fontFamily:'monospace' }}>{pct(m.pinnacleHome)}</span></span>}
+                  </div>
+                </div>
+                <div style={{ textAlign:'right' }}>
+                  <div style={{ fontSize:16, fontWeight:700, color:pnlC(m.pnl), fontFamily:'monospace' }}>{eur(m.pnl)}</div>
+                  <div style={{ fontSize:11, color:m.correct?'#3fb950':'#f85149', marginTop:2 }}>
+                    {m.correct ? '✓ Correct' : '✗ Incorrect'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Formula output */}
+              <div style={{ display:'flex', gap:16, marginBottom:10, padding:'8px 12px', background:'#161b22', borderRadius:6, flexWrap:'wrap' }}>
+                <div style={{ fontSize:11, color:'#484f58' }}>
+                  Formule: <span style={{ fontFamily:'monospace', color:'#f59e0b', fontWeight:600 }}>{m.formulaOutput}</span>
+                </div>
+                <div style={{ fontSize:11, color:'#484f58' }}>
+                  Threshold: <span style={{ fontFamily:'monospace', color:'#8b949e' }}>{m.threshold > 0 ? '+' : ''}{m.threshold}</span>
+                </div>
+                <div style={{ fontSize:11, color:'#484f58' }}>
+                  Prédit: <span style={{ fontWeight:600, color:m.predHome?'#60a5fa':'#fb923c' }}>
+                    {m.predHome ? `${m.home} (home)` : `${m.away} (away)`}
+                  </span>
+                </div>
+                <div style={{ fontSize:11, color:'#484f58' }}>
+                  Résultat: <span style={{ fontWeight:600, color:m.actualHomeWin?'#60a5fa':'#fb923c' }}>
+                    {m.actualHomeWin ? `${m.home} gagne` : `${m.away} gagne`}
+                  </span>
+                </div>
+              </div>
+
+              {/* Per-book bets */}
+              {m.bets.length > 0 && (
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                  {m.bets.map((b, j) => (
+                    <div key={j} style={{
+                      padding:'4px 10px', borderRadius:5, fontSize:11,
+                      background: b.correct ? '#0f2d10' : '#1a0000',
+                      border:`1px solid ${b.correct?'#3fb950':'#5a1a1a'}`,
+                      color: b.correct ? '#3fb950' : '#f85149',
+                      fontFamily:'monospace',
+                    }}>
+                      {bookLabel(b.book)} ×{b.betOdds.toFixed(2)} → {eur(b.pnl)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Calendar analysis section ─────────────────────────────────────────────────
+function CalendarAnalysis({ byDate, byWeek }) {
+  const [view,        setView]        = useState('days');  // 'days' | 'weeks'
+  const [drillDate,   setDrillDate]   = useState(null);
+  const [showAll,     setShowAll]     = useState(false);
+
+  const sortedDays  = useMemo(() => [...byDate].sort((a,b)=>b.pnl-a.pnl), [byDate]);
+  const sortedWeeks = useMemo(() => [...byWeek].sort((a,b)=>b.pnl-a.pnl), [byWeek]);
+
+  const N_DISPLAY = 10;
+  const topDays    = sortedDays.slice(0, N_DISPLAY);
+  const worstDays  = sortedDays.slice(-N_DISPLAY).reverse();
+  const topWeeks   = sortedWeeks.slice(0, N_DISPLAY);
+  const worstWeeks = sortedWeeks.slice(-N_DISPLAY).reverse();
+
+  // Daily P&L chart data
+  const chartData = useMemo(() => byDate.map(d => ({
+    date: d.date.slice(5),   // MM-DD
+    pnl:  +d.pnl.toFixed(2),
+    bets: d.bets,
+  })), [byDate]);
+
+  const drillData = drillDate ? byDate.find(d=>d.date===drillDate) : null;
+
+  return (
+    <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:12, padding:'18px 20px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, flexWrap:'wrap', gap:8 }}>
+        <div style={{ fontSize:13, fontWeight:600, color:'#e6edf3' }}>Analyse calendaire</div>
+        <div style={{ display:'flex', gap:6 }}>
+          {[['days','Par jour'],['weeks','Par semaine']].map(([k,l])=>(
+            <button key={k} onClick={()=>setView(k)} style={{
+              padding:'5px 12px', borderRadius:5, fontSize:11, fontWeight:600, cursor:'pointer',
+              background:view===k?'#132b50':'#0d1117',
+              border:`1px solid ${view===k?'#60a5fa':'#21262d'}`,
+              color:view===k?'#60a5fa':'#8b949e',
+            }}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* P&L bar chart */}
+      {view === 'days' && chartData.length > 0 && (
+        <div style={{ marginBottom:16 }}>
+          <div style={{ fontSize:11, color:'#484f58', marginBottom:8 }}>P&L par jour — cliquer sur une barre pour le détail</div>
+          <ResponsiveContainer width="100%" height={140}>
+            <BarChart data={chartData} margin={{ top:4, right:4, left:-20, bottom:4 }}
+              onClick={e => {
+                if (e?.activePayload?.[0]) {
+                  const idx = e.activeIndex;
+                  if (byDate[idx]) setDrillDate(byDate[idx].date);
+                }
+              }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+              <XAxis dataKey="date" tick={{ fontSize:9, fill:'#484f58' }} interval={Math.max(1,Math.floor(chartData.length/20))} />
+              <YAxis tick={{ fontSize:9, fill:'#484f58' }} tickFormatter={v=>`${v.toFixed(0)}€`} width={50} />
+              <Tooltip contentStyle={TOOLTIP_S}
+                formatter={(v,_,p)=>[`${eur(v)}  (${p.payload.bets} paris)`, 'P&L']}
+                labelFormatter={l=>`Date: ${l}`}
+              />
+              <ReferenceLine y={0} stroke="#484f58" />
+              <Bar dataKey="pnl" radius={[2,2,0,0]} cursor="pointer">
+                {chartData.map((d,i)=><Cell key={i} fill={d.pnl>=0?'#3fb950':'#f85149'} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Best/Worst tables */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+
+        {/* Meilleurs */}
+        <div>
+          <div style={{ fontSize:11, color:'#3fb950', fontWeight:600, marginBottom:8 }}>
+            🏆 Meilleurs {view==='days'?'jours':'semaines'}
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+            {(view==='days' ? topDays : topWeeks).map((item,i) => (
+              <div key={i}
+                onClick={() => view==='days' && setDrillDate(item.date)}
+                style={{
+                  display:'flex', justifyContent:'space-between', alignItems:'center',
+                  padding:'6px 10px', borderRadius:6, fontSize:11,
+                  background:'#0f2d10', border:'1px solid #1a4a1a',
+                  cursor:view==='days'?'pointer':'default',
+                }}
+                onMouseEnter={e=>{if(view==='days')e.currentTarget.style.borderColor='#3fb950';}}
+                onMouseLeave={e=>{if(view==='days')e.currentTarget.style.borderColor='#1a4a1a';}}
+              >
+                <div>
+                  <span style={{ color:'#8b949e', fontFamily:'monospace' }}>{view==='days'?item.date:item.week}</span>
+                  <span style={{ color:'#484f58', marginLeft:8 }}>{item.bets} paris · {item.wins}/{item.bets}</span>
+                </div>
+                <span style={{ color:'#3fb950', fontWeight:700, fontFamily:'monospace' }}>{eur(item.pnl)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Pires */}
+        <div>
+          <div style={{ fontSize:11, color:'#f85149', fontWeight:600, marginBottom:8 }}>
+            💀 Pires {view==='days'?'jours':'semaines'}
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+            {(view==='days' ? worstDays : worstWeeks).map((item,i) => (
+              <div key={i}
+                onClick={() => view==='days' && setDrillDate(item.date)}
+                style={{
+                  display:'flex', justifyContent:'space-between', alignItems:'center',
+                  padding:'6px 10px', borderRadius:6, fontSize:11,
+                  background:'#1a0000', border:'1px solid #3a1a1a',
+                  cursor:view==='days'?'pointer':'default',
+                }}
+                onMouseEnter={e=>{if(view==='days')e.currentTarget.style.borderColor='#f85149';}}
+                onMouseLeave={e=>{if(view==='days')e.currentTarget.style.borderColor='#3a1a1a';}}
+              >
+                <div>
+                  <span style={{ color:'#8b949e', fontFamily:'monospace' }}>{view==='days'?item.date:item.week}</span>
+                  <span style={{ color:'#484f58', marginLeft:8 }}>{item.bets} paris · {item.wins}/{item.bets}</span>
+                </div>
+                <span style={{ color:'#f85149', fontWeight:700, fontFamily:'monospace' }}>{eur(item.pnl)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {view==='days' && (
+        <div style={{ marginTop:10, fontSize:11, color:'#484f58' }}>
+          Cliquer sur un jour pour voir le détail des matchs.
+        </div>
+      )}
+
+      {/* Drilldown modal */}
+      {drillDate && drillData && (
+        <DayDrilldown
+          date={drillDate}
+          matches={drillData.matches}
+          onClose={() => setDrillDate(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function BettingSimulator({ matches, sharedOpcodes, threshModStat=-1, quantileMode=false }) {
   const { opcodes, stackHeight, isComplete, partialStack, results:fRes, push, undo, clear, loadOpcodes } =
     useFormula(matches, threshModStat, quantileMode);
 
   const [params, setParams] = useState({
-    seasons:[...ALL_SEASONS], bookmakers:['pinnacle','winamax_fr','betclic_fr'],
-    strategy:'fixed', baseStake:10, activeFilters:[], confidence:'all',
-    constraints:{ ...DEFAULT_CONSTRAINTS },
+    seasons:       [...ALL_SEASONS],
+    bookmakers:    ['pinnacle','winamax_fr','betclic_fr'],
+    strategy:      'fixed',
+    initialBankroll: 1000,
+    stakePerBet:   10,
+    activeFilters: [],
+    confidence:    'all',
+    constraints:   { ...DEFAULT_CONSTRAINTS },
   });
 
   useEffect(() => {
@@ -259,7 +565,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
       <div style={{ width:400, minWidth:400, flexShrink:0, borderRight:'1px solid #21262d', overflowY:'auto', padding:'20px 18px' }}>
         <div style={{ marginBottom:16 }}>
           <div style={{ fontSize:18, fontWeight:700, color:'#e6edf3', marginBottom:2 }}>Betting Simulator</div>
-          <div style={{ fontSize:12, color:'#484f58' }}>{matches.filter(m=>m.has_odds).length} matchs avec cotes · Résultats mis à jour automatiquement</div>
+          <div style={{ fontSize:12, color:'#484f58' }}>{matches.filter(m=>m.has_odds).length} matchs avec cotes</div>
         </div>
 
         {sharedOpcodes?.length>0&&(
@@ -312,10 +618,10 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
             </div>
           </div>
 
-          {/* Stratégie + Mise */}
+          {/* Stratégie + Mise séparée de la bankroll */}
           <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'12px 14px' }}>
-            <div style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase', marginBottom:8 }}>Stratégie</div>
-            <div style={{ display:'flex', gap:6, marginBottom:8 }}>
+            <div style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase', marginBottom:8 }}>Stratégie & Mises</div>
+            <div style={{ display:'flex', gap:6, marginBottom:12 }}>
               {[['fixed','Mise fixe'],['kelly','Quart-Kelly']].map(([k,l])=>(
                 <button key={k} onClick={()=>set('strategy',k)} style={{
                   flex:1, padding:'7px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
@@ -326,31 +632,56 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               ))}
             </div>
             {params.strategy==='kelly'&&(
-              <div style={{ fontSize:11, color:'#f59e0b', marginBottom:8 }}>
-                ⚠️ Kelly utilise Pinnacle no-vig comme référence. Active les contraintes pour éviter les explosions.
+              <div style={{ fontSize:11, color:'#f59e0b', marginBottom:10 }}>
+                ⚠️ Kelly utilise Pinnacle no-vig comme référence.
               </div>
             )}
-            <div style={{ fontSize:11, color:'#484f58', marginBottom:6 }}>
-              {params.strategy==='fixed'?'Mise par pari (€) — bankroll = 100×':'Bankroll initiale (€)'}
+            {/* Bankroll initiale */}
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:11, color:'#8b949e', marginBottom:5 }}>
+                Bankroll initiale (€) — capital de départ
+              </div>
+              <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                <input type="number" min={1} value={params.initialBankroll}
+                  onChange={e=>set('initialBankroll',Math.max(1,Number(e.target.value)))}
+                  style={{ flex:1, padding:'7px 10px', borderRadius:6, fontSize:13,
+                    background:'#161b22', border:'1px solid #30363d', color:'#e6edf3',
+                    fontFamily:"'JetBrains Mono', monospace" }} />
+                <span style={{ fontSize:12, color:'#484f58' }}>€</span>
+              </div>
             </div>
-            <input type="number" min={1} value={params.baseStake}
-              onChange={e=>set('baseStake',Math.max(1,Number(e.target.value)))}
-              style={{ width:'100%', padding:'7px 10px', borderRadius:6, fontSize:13,
-                background:'#161b22', border:'1px solid #30363d', color:'#e6edf3',
-                fontFamily:"'JetBrains Mono', monospace" }} />
+            {/* Mise par pari (fixed only) */}
+            {params.strategy==='fixed' && (
+              <div>
+                <div style={{ fontSize:11, color:'#8b949e', marginBottom:5 }}>
+                  Mise par pari (€) — montant fixe par match
+                </div>
+                <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                  <input type="number" min={0.5} step={0.5} value={params.stakePerBet}
+                    onChange={e=>set('stakePerBet',Math.max(0.5,Number(e.target.value)))}
+                    style={{ flex:1, padding:'7px 10px', borderRadius:6, fontSize:13,
+                      background:'#161b22', border:'1px solid #30363d', color:'#e6edf3',
+                      fontFamily:"'JetBrains Mono', monospace" }} />
+                  <span style={{ fontSize:12, color:'#484f58' }}>€</span>
+                </div>
+                <div style={{ fontSize:10, color:'#484f58', marginTop:4 }}>
+                  = {params.stakePerBet>0?((params.stakePerBet/params.initialBankroll)*100).toFixed(1):0}% de la bankroll initiale
+                </div>
+              </div>
+            )}
+            {params.strategy==='kelly' && (
+              <div style={{ fontSize:11, color:'#484f58', fontStyle:'italic' }}>
+                La mise Kelly est calculée dynamiquement en fraction de la bankroll courante.
+              </div>
+            )}
           </div>
 
-          {/* Filtres matchs + confiance */}
+          {/* Filtres matchs */}
           <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'12px 14px' }}>
             <div style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase', marginBottom:8, display:'flex', justifyContent:'space-between' }}>
               <span>Filtres de matchs (AND)</span>
-              {params.activeFilters.length>0&&<button onClick={()=>set('activeFilters',[])} style={{ fontSize:10, color:'#f85149', background:'none', border:'none', cursor:'pointer' }}>Tout effacer</button>}
+              {params.activeFilters.length>0&&<button onClick={()=>set('activeFilters',[])} style={{ fontSize:10, color:'#f85149', background:'none', border:'none', cursor:'pointer' }}>Effacer</button>}
             </div>
-            {params.activeFilters.length>0&&(
-              <div style={{ fontSize:11, color:'#60a5fa', marginBottom:8 }}>
-                {params.activeFilters.length} filtre(s) actif(s) — les matchs doivent satisfaire TOUS les filtres
-              </div>
-            )}
             {FILTER_CATS.map(cat=>(
               <div key={cat} style={{ marginBottom:6 }}>
                 <div style={{ fontSize:10, color:'#484f58', fontWeight:600, marginBottom:3, textTransform:'uppercase', letterSpacing:1 }}>{cat}</div>
@@ -384,9 +715,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
             </div>
           </div>
 
-          {/* Contraintes réelles */}
           <ConstraintsPanel constraints={params.constraints} onChange={c=>set('constraints',c)} />
-
         </div>
       </div>
 
@@ -403,20 +732,19 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
         ) : (
           <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
 
-            {/* Stop warning */}
             {result.stopped && (
               <div style={{ background:'#1a0d00', border:'1px solid #f59e0b', borderRadius:8, padding:'10px 16px', fontSize:12, color:'#f59e0b' }}>
                 ⚠️ Simulation arrêtée : <strong>{result.stopReason}</strong>
               </div>
             )}
 
-            {/* KPIs ligne 1 — 4 colonnes */}
+            {/* KPIs ligne 1 */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
               {[
-                { label:'Paris joués',  value:result.totalBets.toLocaleString('fr-FR'), color:'#e6edf3',        sub:`${result.totalWins} gagnés` },
-                { label:'Win rate',     value:pct(result.winRate),                      color:roiC(result.winRate-0.6426), sub:'baseline 64.26%' },
-                { label:'ROI',          value:`${sign(result.roi)}${pct(result.roi)}`, color:roiC(result.roi), sub:'par pari vs mise base' },
-                { label:'P&L total',    value:eur(result.totalPnL),                     color:result.totalPnL>=0?'#3fb950':'#f85149', sub:`vs ${result.initialBankroll.toFixed(0)}€` },
+                { label:'Paris joués',  value:result.totalBets.toLocaleString('fr-FR'), color:'#e6edf3',                     sub:`${result.totalWins} gagnés` },
+                { label:'Win rate',     value:pct(result.winRate),                      color:roiC(result.winRate-0.6426),   sub:'baseline 64.26%' },
+                { label:'ROI',          value:`${sign(result.roi)}${pct(result.roi)}`, color:roiC(result.roi),              sub:'par pari vs mise' },
+                { label:'P&L total',    value:eur(result.totalPnL),                     color:pnlC(result.totalPnL),         sub:`vs ${result.initialBankroll.toFixed(0)}€` },
               ].map(({ label, value, color, sub }) => (
                 <div key={label} style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'14px 16px' }}>
                   <div style={{ fontSize:11, color:'#484f58', marginBottom:5 }}>{label}</div>
@@ -426,18 +754,18 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               ))}
             </div>
 
-            {/* KPIs ligne 2 — 5 colonnes */}
+            {/* KPIs ligne 2 */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10 }}>
               {[
-                { label:'Bankroll finale',     value:`${result.finalBankroll.toFixed(2)}€`,        color:result.totalPnL>=0?'#3fb950':'#f85149' },
-                { label:'Max Drawdown',        value:`-${pct(result.maxDrawdown,1)}`,              color:result.maxDrawdown>0.3?'#f85149':result.maxDrawdown>0.15?'#f59e0b':'#8b949e' },
-                { label:'Plus longue série +', value:`${result.longestWinStreak} consécutifs`,     color:'#3fb950' },
-                { label:'Plus longue série −', value:`${result.longestLoseStreak} consécutifs`,    color:'#f85149' },
-                { label:'Cote moyenne',        value:`×${result.avgOdds.toFixed(3)}`,              color:'#8b949e' },
+                { label:'Bankroll finale',     value:`${result.finalBankroll.toFixed(2)}€`,     color:pnlC(result.totalPnL) },
+                { label:'Max Drawdown',        value:`-${pct(result.maxDrawdown,1)}`,           color:result.maxDrawdown>0.3?'#f85149':result.maxDrawdown>0.15?'#f59e0b':'#8b949e' },
+                { label:'Plus longue série +', value:`${result.longestWinStreak} consécutifs`,  color:'#3fb950' },
+                { label:'Plus longue série −', value:`${result.longestLoseStreak} consécutifs`, color:'#f85149' },
+                { label:'Cote moyenne',        value:`×${result.avgOdds.toFixed(3)}`,           color:'#8b949e' },
               ].map(({ label, value, color }) => (
                 <div key={label} style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:8, padding:'10px 12px' }}>
                   <div style={{ fontSize:10, color:'#484f58', marginBottom:4 }}>{label}</div>
-                  <div style={{ fontSize:15, fontWeight:700, color, fontFamily:'monospace' }}>{value}</div>
+                  <div style={{ fontSize:14, fontWeight:700, color, fontFamily:'monospace' }}>{value}</div>
                 </div>
               ))}
             </div>
@@ -454,7 +782,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               </div>
               <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:8, padding:'10px 14px' }}>
                 <div style={{ fontSize:10, color:'#484f58', marginBottom:4 }}>Gain moyen par pari</div>
-                <div style={{ fontSize:18, fontWeight:700, fontFamily:'monospace', color:result.totalPnL>=0?'#3fb950':'#f85149' }}>
+                <div style={{ fontSize:18, fontWeight:700, fontFamily:'monospace', color:pnlC(result.gainMoyen) }}>
                   {result.totalBets>0?eur(result.gainMoyen):'—'}
                 </div>
                 <div style={{ fontSize:10, color:'#484f58', marginTop:2 }}>En € absolus par pari joué</div>
@@ -483,6 +811,11 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               </ResponsiveContainer>
             </div>
 
+            {/* Analyse calendaire */}
+            {result.byDate.length > 0 && (
+              <CalendarAnalysis byDate={result.byDate} byWeek={result.byWeek} />
+            )}
+
             {/* Par bookmaker */}
             {result.byBook.length>1&&(
               <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:12, overflow:'hidden' }}>
@@ -504,7 +837,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
                         </td>
                         <td style={{ padding:'6px 12px', textAlign:'right', color:'#8b949e' }}>{bk.bets}</td>
                         <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', color:roiC(bk.winRate-0.6426) }}>{pct(bk.winRate)}</td>
-                        <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', color:bk.pnl>=0?'#3fb950':'#f85149' }}>{eur(bk.pnl)}</td>
+                        <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', color:pnlC(bk.pnl) }}>{eur(bk.pnl)}</td>
                         <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', fontWeight:600, color:roiC(bk.roi) }}>{sign(bk.roi)}{pct(bk.roi)}</td>
                       </tr>
                     ))}
@@ -530,7 +863,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
                       <td style={{ padding:'6px 12px', color:'#e6edf3', fontFamily:'monospace' }}>{s.season}</td>
                       <td style={{ padding:'6px 12px', textAlign:'right', color:'#8b949e' }}>{s.bets}</td>
                       <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', color:roiC(s.winRate-0.6426) }}>{pct(s.winRate)}</td>
-                      <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', color:s.pnl>=0?'#3fb950':'#f85149' }}>{eur(s.pnl)}</td>
+                      <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', color:pnlC(s.pnl) }}>{eur(s.pnl)}</td>
                       <td style={{ padding:'6px 12px', textAlign:'right', fontFamily:'monospace', fontWeight:600, color:roiC(s.roi) }}>{sign(s.roi)}{pct(s.roi)}</td>
                     </tr>
                   ))}
@@ -542,7 +875,6 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               <div style={{ fontSize:11, color:'#484f58', lineHeight:1.6 }}>
                 <span style={{ color:'#f59e0b', fontWeight:600 }}>⚠️ In-sample : </span>
                 Threshold optimisé sur le même dataset. Résultats optimistes — valider sur futures données.
-                {' '}Bankroll = 100 × mise de base (fixe) ou = mise de base (Kelly).
                 {' '}<span style={{ color:'#3fb950' }}>Profit Factor &gt; 1.5</span> et
                 {' '}<span style={{ color:'#f85149' }}>Max Drawdown &lt; 20%</span> = signaux de robustesse.
               </div>
