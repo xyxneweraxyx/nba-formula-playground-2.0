@@ -44,8 +44,8 @@ const MATCH_FILTERS = [
 const FILTER_CATS = [...new Set(MATCH_FILTERS.map(f=>f.cat))];
 
 const DEFAULT_CONSTRAINTS = {
-  enabled:false, maxStakePct:5, maxOdds:5.0, minOdds:1.25,
-  stopLossPct:50, maxConsecLosses:15, flatKellyFraction:0.25,
+  enabled:false, maxStakePct:5, maxOdds:10.0, minOdds:1.00,
+  stopLossPct:50, maxConsecLosses:100, flatKellyFraction:0.25,
 };
 
 function predictOne(output, match, optimResult) {
@@ -143,23 +143,13 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
       let stake;
       if (strategy==='fixed') {
         stake = stakePerBet;
-        if (stake<=0||bankroll<=0) return;
       } else {
-        // Kelly requires a reference probability — skip if unavailable
-        if (!match.no_vig_ref) return;
-        const p = predHome ? match.no_vig_ref.home : match.no_vig_ref.away;
-        const b = betOdds - 1;
-        if (b <= 0) return;
-        // Kelly fraction: (p*b - (1-p)) / b
-        const fk = (p * b - (1 - p)) / b;
-        if (fk <= 0) return;  // Kelly says no edge → don't bet
-        const fraction = C.enabled ? C.flatKellyFraction : 0.25;
-        stake = bankroll * fk * fraction;
-        const cap = C.enabled ? C.maxStakePct / 100 : 0.05;
-        stake = Math.min(stake, bankroll * cap);
-        // No artificial floor in Kelly mode — if Kelly says tiny bet, bet tiny
-        if (stake <= 0 || bankroll <= 0) return;
+        // % Bankroll: mise = stakePercent% de la bankroll courante
+        // Ex: stakePerBet=2 → 2% de la bankroll courante par pari
+        stake = bankroll * (stakePerBet / 100);
+        if (C.enabled) stake = Math.min(stake, bankroll * C.maxStakePct / 100);
       }
+      if (stake <= 0 || bankroll <= 0) return;
       stake = Math.min(stake, bankroll * 0.95);
 
       totalBets++; totalOddsSum+=betOdds; matchBetCount++;
@@ -223,7 +213,7 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
   return {
     totalBets, totalWins,
     winRate:totalBets>0?totalWins/totalBets:0,
-    totalPnL, roi:totalBets>0?(strategy==='kelly'?totalPnL/initialBankroll:totalPnL/(totalBets*stakePerBet)):0,
+    totalPnL, roi:totalBets>0?(strategy==='percent'?totalPnL/initialBankroll:totalPnL/(totalBets*stakePerBet)):0,
     finalBankroll:bankroll, initialBankroll, maxDrawdown:maxDD,
     longestWinStreak:longestWS, longestLoseStreak:longestLS,
     avgOdds:totalBets>0?totalOddsSum/totalBets:0,
@@ -234,12 +224,12 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     byBook: Object.entries(byBook).map(([book,s])=>({
       book, bets:s.bets, wins:s.wins,
       winRate:s.bets>0?s.wins/s.bets:0, pnl:s.pnl,
-      roi:s.bets>0?(strategy==='kelly'?s.pnl/initialBankroll:s.pnl/(s.bets*stakePerBet)):0,
+      roi:s.bets>0?(strategy==='percent'?s.pnl/initialBankroll:s.pnl/(s.bets*stakePerBet)):0,
     })).filter(b=>b.bets>0).sort((a,b)=>b.roi-a.roi),
     bySeason: Object.entries(bySeason).map(([season,s])=>({
       season, bets:s.bets, wins:s.wins,
       winRate:s.bets>0?s.wins/s.bets:0, pnl:s.pnl,
-      roi:s.bets>0?(strategy==='kelly'?s.pnl/initialBankroll:s.pnl/(s.bets*stakePerBet)):0,
+      roi:s.bets>0?(strategy==='percent'?s.pnl/initialBankroll:s.pnl/(s.bets*stakePerBet)):0,
     })).sort((a,b)=>a.season.localeCompare(b.season)),
   };
 }
@@ -280,10 +270,10 @@ function ConstraintsPanel({ constraints, onChange }) {
           {[
             { key:'flatKellyFraction', label:'Fraction Kelly',          unit:'×', min:0.05, max:1,   step:0.05, help:'0.25 = quart-Kelly' },
             { key:'maxStakePct',       label:'Mise max % bankroll',     unit:'%', min:1,    max:20,  step:0.5,  help:'Cap par rapport à la bankroll' },
-            { key:'minOdds',           label:'Cote minimale',           unit:'×', min:1.05, max:2.5, step:0.05, help:'Ignorer sous cette cote' },
+            { key:'minOdds',           label:'Cote minimale',           unit:'×', min:1.00, max:2.5, step:0.05, help:'Ignorer sous cette cote' },
             { key:'maxOdds',           label:'Cote maximale',           unit:'×', min:2,    max:20,  step:0.5,  help:'Ignorer au-dessus' },
             { key:'stopLossPct',       label:'Stop-loss bankroll',      unit:'%', min:10,   max:80,  step:5,    help:'Arrêter si perte X% de l\'initiale' },
-            { key:'maxConsecLosses',   label:'Pertes consécutives max', unit:'',  min:3,    max:30,  step:1,    help:'Arrêter après X pertes consécutives' },
+            { key:'maxConsecLosses',   label:'Pertes consécutives max', unit:'',  min:3,    max:200, step:1,    help:'Arrêter après X pertes consécutives' },
           ].map(({ key, label, unit, min, max, step, help }) => (
             <div key={key}>
               <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
@@ -644,8 +634,8 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
           <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'12px 14px' }}>
             <div style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase', marginBottom:8 }}>Stratégie & Mises</div>
             <div style={{ display:'flex', gap:6, marginBottom:12 }}>
-              {[['fixed','Mise fixe'],['kelly','Quart-Kelly']].map(([k,l])=>(
-                <button key={k} onClick={()=>set('strategy',k)} style={{
+              {[['fixed','Mise fixe (€)'],['percent','% Bankroll']].map(([k,l])=>(
+                <button key={k} onClick={()=>{set('strategy',k);if(k==='percent'&&params.strategy==='fixed')set('stakePerBet',2);if(k==='fixed'&&params.strategy==='percent')set('stakePerBet',10);}} style={{
                   flex:1, padding:'7px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
                   background:params.strategy===k?'#132b50':'#0d1117',
                   border:`1px solid ${params.strategy===k?'#60a5fa':'#21262d'}`,
@@ -653,11 +643,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
                 }}>{l}</button>
               ))}
             </div>
-            {params.strategy==='kelly'&&(
-              <div style={{ fontSize:11, color:'#f59e0b', marginBottom:10 }}>
-                ⚠️ Kelly utilise Pinnacle no-vig comme référence.
-              </div>
-            )}
+
             {/* Bankroll initiale */}
             <div style={{ marginBottom:10 }}>
               <div style={{ fontSize:11, color:'#8b949e', marginBottom:5 }}>
@@ -672,12 +658,10 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
                 <span style={{ fontSize:12, color:'#484f58' }}>€</span>
               </div>
             </div>
-            {/* Mise par pari (fixed only) */}
-            {params.strategy==='fixed' && (
+            {/* Mise — adaptatif selon stratégie */}
+            {params.strategy==='fixed' ? (
               <div>
-                <div style={{ fontSize:11, color:'#8b949e', marginBottom:5 }}>
-                  Mise par pari (€) — montant fixe par match
-                </div>
+                <div style={{ fontSize:11, color:'#8b949e', marginBottom:5 }}>Mise par pari (€) — montant fixe par match</div>
                 <div style={{ display:'flex', gap:6, alignItems:'center' }}>
                   <input type="number" min={0.5} step={0.5} value={params.stakePerBet}
                     onChange={e=>set('stakePerBet',Math.max(0.5,Number(e.target.value)))}
@@ -690,10 +674,20 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
                   = {params.stakePerBet>0?((params.stakePerBet/params.initialBankroll)*100).toFixed(1):0}% de la bankroll initiale
                 </div>
               </div>
-            )}
-            {params.strategy==='kelly' && (
-              <div style={{ fontSize:11, color:'#484f58', fontStyle:'italic' }}>
-                La mise Kelly est calculée dynamiquement en fraction de la bankroll courante.
+            ) : (
+              <div>
+                <div style={{ fontSize:11, color:'#8b949e', marginBottom:5 }}>Mise par pari (% bankroll courante)</div>
+                <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                  <input type="number" min={0.1} max={50} step={0.1} value={params.stakePerBet}
+                    onChange={e=>set('stakePerBet',Math.min(50,Math.max(0.1,Number(e.target.value))))}
+                    style={{ flex:1, padding:'7px 10px', borderRadius:6, fontSize:13,
+                      background:'#161b22', border:'1px solid #30363d', color:'#e6edf3',
+                      fontFamily:"'JetBrains Mono', monospace" }} />
+                  <span style={{ fontSize:12, color:'#484f58' }}>%</span>
+                </div>
+                <div style={{ fontSize:10, color:'#484f58', marginTop:4 }}>
+                  = {(params.initialBankroll * params.stakePerBet / 100).toFixed(2)}€ sur la bankroll initiale · mise variable ensuite
+                </div>
               </div>
             )}
           </div>
@@ -777,7 +771,7 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               {[
                 { label:'Paris joués',  value:result.totalBets.toLocaleString('fr-FR'), color:'#e6edf3',                     sub:`${result.totalWins} gagnés` },
                 { label:'Win rate',     value:pct(result.winRate),                      color:roiC(result.winRate-0.6426),   sub:'baseline 64.26%' },
-                { label:'ROI',          value:`${sign(result.roi)}${pct(result.roi)}`, color:roiC(result.roi),              sub:'par pari vs mise' },
+                { label:'ROI',          value:`${sign(result.roi)}${pct(result.roi)}`, color:roiC(result.roi),              sub:params.strategy==='percent'?'retour sur bankroll initiale':'par pari vs mise' },
                 { label:'P&L total',    value:eur(result.totalPnL),                     color:pnlC(result.totalPnL),         sub:`vs ${result.initialBankroll.toFixed(0)}€` },
               ].map(({ label, value, color, sub }) => (
                 <div key={label} style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'14px 16px' }}>
