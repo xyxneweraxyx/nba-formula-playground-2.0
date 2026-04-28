@@ -43,9 +43,96 @@ const MATCH_FILTERS = [
 ];
 const FILTER_CATS = [...new Set(MATCH_FILTERS.map(f=>f.cat))];
 
+// Sharp books / exchanges — jamais restreints dans la réalité
+// Sources: OddsMonkey, RebelBetting, SBR forums, UK GC 2025 report (4.31% comptes restreints, 46.78% en profit)
+const SHARP_SET = new Set(['pinnacle','betfair_ex_eu','matchbook','betfair']);
+
+// ── Modes de simulation réalistes ────────────────────────────────────────────
+// Basés sur: témoignages (Betsson limité après 2 paris de 80€, WilliamHill après 2 paris de 200€,
+// Bet365 après 30 paris de 200-500€), UK GC 2025, forums SBR, RebelBetting community
+const MODES = {
+  recreatif: {
+    label:'🎭 Récréatif', color:'#8b949e',
+    description:'Petit parieur, mises modestes, restrictions rapides. Scénario très courant.',
+    bookRestrictionsEnabled:true,
+    softLimitTrigger:300,      // €300 nets/book → restriction (10-30 paris gagnants)
+    postSoftLimitMaxStake:8,   // €8/pari max après restriction
+    hardLimitTrigger:800,      // €800 nets → compte fermé
+    maxExposurePerMatch:100,   // €100 max sur un match (tous books)
+    maxExposurePerDay:300,     // €300/jour max
+    maxStakePerBet:50,         // €50 max/pari — typique petit parieur
+    minOdds:1.10, maxOdds:5.0,
+    maxPayoutPerBet:5000,      // €5k gain max/pari
+    stopLossPct:80, maxConsecLosses:100,
+    taxEnabled:false, taxRate:20, taxThreshold:10000,
+  },
+  realiste: {
+    label:'📊 Réaliste', color:'#60a5fa',
+    description:'Parieur régulier — scénario le plus probable selon les témoignages de la communauté.',
+    bookRestrictionsEnabled:true,
+    softLimitTrigger:800,
+    postSoftLimitMaxStake:15,  // €5-15 typique selon les sources
+    hardLimitTrigger:3000,
+    maxExposurePerMatch:300,
+    maxExposurePerDay:1500,
+    maxStakePerBet:200,        // €200 = seuil "mise significative" selon les experts
+    minOdds:1.05, maxOdds:8.0,
+    maxPayoutPerBet:50000,
+    stopLossPct:80, maxConsecLosses:100,
+    taxEnabled:false, taxRate:20, taxThreshold:10000,
+  },
+  optimiste: {
+    label:'📈 Optimiste', color:'#3fb950',
+    description:'Books tolérants, restrictions tardives. Meilleur scénario réaliste.',
+    bookRestrictionsEnabled:true,
+    softLimitTrigger:3000,
+    postSoftLimitMaxStake:25,
+    hardLimitTrigger:10000,
+    maxExposurePerMatch:800,
+    maxExposurePerDay:5000,
+    maxStakePerBet:300,
+    minOdds:1.05, maxOdds:10.0,
+    maxPayoutPerBet:100000,
+    stopLossPct:80, maxConsecLosses:100,
+    taxEnabled:false, taxRate:20, taxThreshold:10000,
+  },
+  pessimiste: {
+    label:'💀 Pessimiste', color:'#f85149',
+    description:'Books très agressifs. Betsson: limité après 2 paris de 80€. WilliamHill: après 2×200€.',
+    bookRestrictionsEnabled:true,
+    softLimitTrigger:150,
+    postSoftLimitMaxStake:5,   // €3-5 — témoignages extrêmes
+    hardLimitTrigger:400,
+    maxExposurePerMatch:80,
+    maxExposurePerDay:200,
+    maxStakePerBet:80,
+    minOdds:1.10, maxOdds:4.0,
+    maxPayoutPerBet:2000,
+    stopLossPct:80, maxConsecLosses:100,
+    taxEnabled:false, taxRate:20, taxThreshold:10000,
+  },
+  sharpOnly: {
+    label:'🎯 Sharp Only', color:'#f59e0b',
+    description:'Pinnacle + Exchanges uniquement — jamais restreint. Sélectionner uniquement ces 4 books.',
+    bookRestrictionsEnabled:false,
+    softLimitTrigger:999999, postSoftLimitMaxStake:9999, hardLimitTrigger:999999,
+    maxExposurePerMatch:5000,   // Pinnacle accepte ~€2-5k sur NBA
+    maxExposurePerDay:20000,
+    maxStakePerBet:2000,
+    minOdds:1.01, maxOdds:20.0,
+    maxPayoutPerBet:500000,
+    stopLossPct:80, maxConsecLosses:100,
+    taxEnabled:false, taxRate:20, taxThreshold:10000,
+  },
+  custom: {
+    label:'⚙️ Custom', color:'#8b949e',
+    description:'Configurez manuellement toutes les contraintes ci-dessous.',
+  },
+};
+
 const DEFAULT_CONSTRAINTS = {
-  enabled:false, maxStakePct:5, maxOdds:10.0, minOdds:1.00,
-  stopLossPct:50, maxConsecLosses:100, flatKellyFraction:0.25,
+  mode:'realiste', enabled:true,
+  ...MODES.realiste,
 };
 
 function predictOne(output, match, optimResult) {
@@ -99,20 +186,29 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
   }
   if (!pool.length) return { empty:true };
 
-  const C = constraints?.enabled ? constraints : DEFAULT_CONSTRAINTS;
+  const C = constraints?.enabled ? constraints : { ...DEFAULT_CONSTRAINTS, enabled:false };
   let bankroll=initialBankroll, peak=initialBankroll, maxDD=0;
   const equity=[{ date:'Départ', value:bankroll }];
   let totalBets=0, totalWins=0, totalPnL=0, consecLosses=0;
   let longestWS=0, longestLS=0, curWS=0, curLS=0, totalOddsSum=0;
-  let grossWins=0, grossLosses=0;
+  let grossWins=0, grossLosses=0, totalTaxPaid=0;
   let stopped=false, stopReason='';
   const byBook={}, bySeason={};
   bookmakers.forEach(b=>{byBook[b]={bets:0,wins:0,pnl:0};});
 
-  // Per-match detail log
+  // Per-book live restriction tracking
+  const bookNetPnlLive = {};  // cumul net P&L par book (temps réel)
+  const bookStatus     = {};  // 'active' | 'soft' | 'closed'
+  bookmakers.forEach(b=>{ bookNetPnlLive[b]=0; bookStatus[b]='active'; });
+
+  // Per-day exposure tracking
+  const dayExposure = {};
+  // Per-year P&L for taxation
+  const yearlyPnl = {};
+
+  // Per-match detail log / per-date aggregation
   const matchLog = [];
-  // Per-date aggregation
-  const byDate = {};
+  const byDate   = {};
 
   pool.forEach((match,i) => {
     if (stopped) return;
@@ -126,38 +222,78 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     const out = outputs[i];
     const predHome = predictOne(out, match, optimResult);
     const correct  = predHome===(match.a_wins===1);
+    const date     = match.date;
+    const year     = date.slice(0,4);
     if (!bySeason[match.season]) bySeason[match.season]={bets:0,wins:0,pnl:0};
+    if (!byDate[date])           byDate[date]={date,bets:0,wins:0,pnl:0,matches:[]};
+    if (!dayExposure[date])      dayExposure[date]=0;
+    if (!yearlyPnl[year])        yearlyPnl[year]=0;
 
-    const date = match.date;
-    if (!byDate[date]) byDate[date]={date,bets:0,wins:0,pnl:0,matches:[]};
+    // Daily exposure cap — skip entire match if day is full
+    if (C.enabled && C.maxExposurePerDay && dayExposure[date] >= C.maxExposurePerDay) return;
 
-    // Build per-book bets for this match
     const matchBets = [];
-    let matchPnl = 0, matchBetCount = 0;
+    let matchPnl=0, matchStake=0, matchBetCount=0;
 
     bookmakers.forEach(book => {
       if (!match.odds?.[book]) return;
+
+      // Book closed → skip
+      if (C.enabled && bookStatus[book]==='closed') return;
+
       const betOdds = predHome?match.odds[book].home:match.odds[book].away;
+
+      // Odds filter
       if (C.enabled && (betOdds > C.maxOdds || betOdds < C.minOdds)) return;
 
+      // ── Base stake ────────────────────────────────────────────────────────
       let stake;
       if (strategy==='fixed') {
         stake = stakePerBet;
       } else {
-        // % Bankroll: mise = stakePercent% de la bankroll courante
-        // Ex: stakePerBet=2 → 2% de la bankroll courante par pari
         stake = bankroll * (stakePerBet / 100);
-        if (C.enabled) stake = Math.min(stake, bankroll * C.maxStakePct / 100);
       }
-      if (stake <= 0 || bankroll <= 0) return;
-      stake = Math.min(stake, bankroll * 0.95);
 
+      // ── Cap: max stake per bet ────────────────────────────────────────────
+      if (C.enabled && C.maxStakePerBet) stake = Math.min(stake, C.maxStakePerBet);
+
+      // ── Cap: soft limit (book en restriction) ─────────────────────────────
+      if (C.enabled && C.bookRestrictionsEnabled && bookStatus[book]==='soft') {
+        stake = Math.min(stake, C.postSoftLimitMaxStake);
+      }
+
+      // ── Cap: exposure per match (tous books confondus) ────────────────────
+      if (C.enabled && C.maxExposurePerMatch) {
+        const rem = C.maxExposurePerMatch - matchStake;
+        if (rem <= 0) return;
+        stake = Math.min(stake, rem);
+      }
+
+      // ── Cap: exposure per day ─────────────────────────────────────────────
+      if (C.enabled && C.maxExposurePerDay) {
+        const rem = C.maxExposurePerDay - dayExposure[date];
+        if (rem <= 0) return;
+        stake = Math.min(stake, rem);
+      }
+
+      // ── Cap: max payout per bet ───────────────────────────────────────────
+      if (C.enabled && C.maxPayoutPerBet) {
+        const potentialWin = stake * (betOdds - 1);
+        if (potentialWin > C.maxPayoutPerBet) stake = C.maxPayoutPerBet / (betOdds - 1);
+      }
+
+      stake = Math.min(stake, bankroll * 0.95);
+      if (stake <= 0 || bankroll <= 0) return;
+
+      // ── Execute bet ───────────────────────────────────────────────────────
       totalBets++; totalOddsSum+=betOdds; matchBetCount++;
+      matchStake+=stake;
+      dayExposure[date]+=stake;
       byBook[book].bets++; bySeason[match.season].bets++;
       byDate[date].bets++;
 
       const pnl = correct ? stake*(betOdds-1) : -stake;
-      matchPnl += pnl;
+      matchPnl+=pnl;
 
       if (correct) {
         totalWins++; totalPnL+=pnl; bankroll+=pnl; grossWins+=pnl;
@@ -173,6 +309,17 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
         consecLosses++; curLS++; curWS=0; longestLS=Math.max(longestLS,curLS);
       }
       bankroll=Math.max(bankroll,0);
+      bookNetPnlLive[book]+=pnl;
+      yearlyPnl[year]+=pnl;
+
+      // ── Update book restriction status (soft books uniquement) ────────────
+      if (C.enabled && C.bookRestrictionsEnabled && !SHARP_SET.has(book)) {
+        if (bookNetPnlLive[book] >= C.hardLimitTrigger) {
+          bookStatus[book]='closed';
+        } else if (bookNetPnlLive[book] >= C.softLimitTrigger && bookStatus[book]==='active') {
+          bookStatus[book]='soft';
+        }
+      }
 
       matchBets.push({ book, betOdds, stake, pnl, correct });
     });
@@ -192,12 +339,38 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
       byDate[date].matches.push(matchEntry);
     }
 
+    // ── Taxation annuelle (fin d'année calendaire) ────────────────────────
+    if (C.enabled && C.taxEnabled && i+1 < pool.length) {
+      const nextYear = pool[i+1].date.slice(0,4);
+      if (nextYear !== year && yearlyPnl[year] > C.taxThreshold) {
+        const tax = (yearlyPnl[year] - C.taxThreshold) * (C.taxRate/100);
+        bankroll = Math.max(0, bankroll - tax);
+        totalTaxPaid += tax;
+      }
+    }
+
     if (bankroll>peak) peak=bankroll;
     const dd=(peak-bankroll)/peak;
     if (dd>maxDD) maxDD=dd;
     if ((i+1)%5===0||i===pool.length-1)
       equity.push({ date:match.date.slice(0,7), value:Math.round(bankroll*100)/100 });
   });
+
+  // Tax sur la dernière année
+  if (C.enabled && C.taxEnabled && pool.length) {
+    const lastYear = pool[pool.length-1].date.slice(0,4);
+    if (yearlyPnl[lastYear] > C.taxThreshold) {
+      const tax = (yearlyPnl[lastYear] - C.taxThreshold) * (C.taxRate/100);
+      bankroll=Math.max(0,bankroll-tax); totalTaxPaid+=tax;
+    }
+  }
+
+  // Book restriction summary
+  const bookRestrictions = bookmakers
+    .filter(b=>bookStatus[b]!=='active')
+    .map(b=>({ book:b, status:bookStatus[b], netPnl:bookNetPnlLive[b], isSharp:SHARP_SET.has(b) }));
+  const nSoftLimited = bookRestrictions.filter(b=>b.status==='soft').length;
+  const nClosed      = bookRestrictions.filter(b=>b.status==='closed').length;
 
   // Build week aggregations
   const byWeek = {};
@@ -219,12 +392,15 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     avgOdds:totalBets>0?totalOddsSum/totalBets:0,
     profitFactor:grossLosses>0?grossWins/grossLosses:null,
     gainMoyen:totalBets>0?totalPnL/totalBets:0,
+    totalTaxPaid,
+    nSoftLimited, nClosed, bookRestrictions,
     equity, stopped, stopReason, matchLog,
     byDate: dateArr, byWeek: weekArr,
     byBook: Object.entries(byBook).map(([book,s])=>({
       book, bets:s.bets, wins:s.wins,
       winRate:s.bets>0?s.wins/s.bets:0, pnl:s.pnl,
       roi:s.bets>0?(strategy==='percent'?s.pnl/initialBankroll:s.pnl/(s.bets*stakePerBet)):0,
+      status:bookStatus[book], netPnlLive:bookNetPnlLive[book],
     })).filter(b=>b.bets>0).sort((a,b)=>b.roi-a.roi),
     bySeason: Object.entries(bySeason).map(([season,s])=>({
       season, bets:s.bets, wins:s.wins,
@@ -252,11 +428,69 @@ function ExportBtn({ data, filename, label='↓ Export JSON' }) {
   );
 }
 function ConstraintsPanel({ constraints, onChange }) {
-  const { enabled } = constraints;
+  const { mode='realiste', enabled=true } = constraints;
+
+  const applyMode = (m) => {
+    if (m==='custom') { onChange({...constraints, mode:'custom'}); return; }
+    onChange({ ...MODES[m], mode:m, enabled:true });
+  };
+  const set = (key,val) => onChange({...constraints, mode:'custom', [key]:val});
+
+  const Slider = ({ k, label, unit, min, max, step, help }) => (
+    <div style={{ opacity:mode!=='custom'?0.65:1 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
+        <span style={{ fontSize:11, color:'#8b949e' }}>{label}</span>
+        <span style={{ fontSize:12, color:'#f59e0b', fontFamily:'monospace', fontWeight:600 }}>{constraints[k]}{unit}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={constraints[k]??min}
+        disabled={mode!=='custom'}
+        onChange={e=>set(k,parseFloat(e.target.value))}
+        style={{ width:'100%', accentColor:'#f59e0b' }} />
+      <div style={{ fontSize:10, color:'#484f58' }}>{help}</div>
+    </div>
+  );
+
+  const Toggle = ({ k, labelOn, labelOff }) => (
+    <button onClick={()=>mode==='custom'&&set(k,!constraints[k])} style={{
+      padding:'3px 10px', borderRadius:4, fontSize:10, fontWeight:600,
+      cursor:mode==='custom'?'pointer':'default',
+      background:constraints[k]?'#0f2d10':'#0d1117',
+      border:`1px solid ${constraints[k]?'#3fb950':'#21262d'}`,
+      color:constraints[k]?'#3fb950':'#484f58',
+    }}>{constraints[k]?`✓ ${labelOn}`:`○ ${labelOff}`}</button>
+  );
+
   return (
     <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:10, padding:'12px 14px' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:enabled?12:0 }}>
-        <span style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase' }}>Contraintes réelles</span>
+      <div style={{ fontSize:11, color:'#484f58', fontWeight:600, letterSpacing:2, textTransform:'uppercase', marginBottom:10 }}>Contraintes réelles</div>
+
+      {/* ── Mode buttons ── */}
+      <div style={{ marginBottom:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:5, marginBottom:6 }}>
+          {Object.entries(MODES).map(([k,m])=>(
+            <button key={k} onClick={()=>applyMode(k)} style={{
+              padding:'6px 4px', borderRadius:6, fontSize:10, fontWeight:600, cursor:'pointer', textAlign:'center',
+              background:mode===k?'#1c2236':'#0d1117',
+              border:`1px solid ${mode===k?(m.color||'#60a5fa'):'#21262d'}`,
+              color:mode===k?(m.color||'#60a5fa'):'#484f58',
+            }}>{m.label}</button>
+          ))}
+        </div>
+        {mode && MODES[mode] && (
+          <div style={{ fontSize:10, color:'#484f58', fontStyle:'italic', lineHeight:1.5, padding:'6px 8px', background:'#0a0e18', borderRadius:6 }}>
+            {MODES[mode].description ?? 'Configurez manuellement.'}
+          </div>
+        )}
+        {mode!=='custom' && (
+          <div style={{ fontSize:10, color:'#484f58', marginTop:5, textAlign:'center' }}>
+            Passer en <button onClick={()=>applyMode('custom')} style={{ background:'none', border:'none', color:'#60a5fa', cursor:'pointer', fontSize:10, padding:0 }}>⚙️ Custom</button> pour modifier les sliders
+          </div>
+        )}
+      </div>
+
+      {/* ── Enable toggle ── */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+        <span style={{ fontSize:11, color:'#8b949e' }}>Appliquer les contraintes</span>
         <button onClick={()=>onChange({...constraints,enabled:!enabled})} style={{
           padding:'4px 10px', borderRadius:5, fontSize:11, fontWeight:600, cursor:'pointer',
           background:enabled?'#0f2d10':'#0d1117',
@@ -264,28 +498,87 @@ function ConstraintsPanel({ constraints, onChange }) {
           color:enabled?'#3fb950':'#484f58',
         }}>{enabled?'✓ ON':'○ OFF'}</button>
       </div>
-      {!enabled && <div style={{ fontSize:11, color:'#484f58', fontStyle:'italic', marginTop:6 }}>Activer pour limites de mise, stop-loss, filtre cotes…</div>}
+
       {enabled && (
-        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-          {[
-            { key:'flatKellyFraction', label:'Fraction Kelly',          unit:'×', min:0.05, max:1,   step:0.05, help:'0.25 = quart-Kelly' },
-            { key:'maxStakePct',       label:'Mise max % bankroll',     unit:'%', min:1,    max:20,  step:0.5,  help:'Cap par rapport à la bankroll' },
-            { key:'minOdds',           label:'Cote minimale',           unit:'×', min:1.00, max:2.5, step:0.05, help:'Ignorer sous cette cote' },
-            { key:'maxOdds',           label:'Cote maximale',           unit:'×', min:2,    max:20,  step:0.5,  help:'Ignorer au-dessus' },
-            { key:'stopLossPct',       label:'Stop-loss bankroll',      unit:'%', min:10,   max:80,  step:5,    help:'Arrêter si perte X% de l\'initiale' },
-            { key:'maxConsecLosses',   label:'Pertes consécutives max', unit:'',  min:3,    max:200, step:1,    help:'Arrêter après X pertes consécutives' },
-          ].map(({ key, label, unit, min, max, step, help }) => (
-            <div key={key}>
-              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
-                <span style={{ fontSize:11, color:'#8b949e' }}>{label}</span>
-                <span style={{ fontSize:12, color:'#f59e0b', fontFamily:'monospace', fontWeight:600 }}>{constraints[key]}{unit}</span>
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+
+          {/* Restrictions par book */}
+          <div style={{ borderTop:'1px solid #21262d', paddingTop:12 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+              <div style={{ fontSize:11, color:'#60a5fa', fontWeight:600 }}>
+                📚 Restrictions par bookmaker
+                <div style={{ fontSize:10, color:'#484f58', fontWeight:400, marginTop:1 }}>Pinnacle 🎯 + Exchanges = jamais restreints</div>
               </div>
-              <input type="range" min={min} max={max} step={step} value={constraints[key]}
-                onChange={e=>onChange({...constraints,[key]:parseFloat(e.target.value)})}
-                style={{ width:'100%', accentColor:'#f59e0b' }} />
-              <div style={{ fontSize:10, color:'#484f58' }}>{help}</div>
+              <Toggle k="bookRestrictionsEnabled" labelOn="ON" labelOff="OFF" />
             </div>
-          ))}
+            {constraints.bookRestrictionsEnabled && (
+              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                <Slider k="softLimitTrigger" label="Gains nets/book → restriction douce" unit="€" min={50} max={15000} step={50}
+                  help={`Après ${constraints.softLimitTrigger}€ nets sur un book → max ${constraints.postSoftLimitMaxStake}€/pari`} />
+                <Slider k="postSoftLimitMaxStake" label="Mise max après restriction douce" unit="€" min={2} max={100} step={1}
+                  help="€5-15 typique selon témoignages (Betsson: €3-6, WilliamHill: €2-30)" />
+                <Slider k="hardLimitTrigger" label="Gains nets/book → fermeture compte" unit="€" min={100} max={100000} step={100}
+                  help={`Après ${constraints.hardLimitTrigger}€ nets → compte définitivement fermé`} />
+              </div>
+            )}
+          </div>
+
+          {/* Limites d'exposition */}
+          <div style={{ borderTop:'1px solid #21262d', paddingTop:12 }}>
+            <div style={{ fontSize:11, color:'#f59e0b', fontWeight:600, marginBottom:8 }}>💰 Limites d'exposition</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              <Slider k="maxStakePerBet" label="Mise max par pari" unit="€" min={5} max={5000} step={5}
+                help="€200 = seuil 'mise significative' selon les experts. >€150 attire l'attention." />
+              <Slider k="maxExposurePerMatch" label="Exposition max par match" unit="€" min={10} max={20000} step={10}
+                help="Total toutes books confondues sur un même match" />
+              <Slider k="maxExposurePerDay" label="Exposition max par jour" unit="€" min={50} max={50000} step={50}
+                help="Total misé sur une même journée (tous books)" />
+              <Slider k="maxPayoutPerBet" label="Gain max par pari" unit="€" min={500} max={500000} step={500}
+                help="Cap payout — Pinnacle: ~€500k, soft books: €5-50k" />
+            </div>
+          </div>
+
+          {/* Filtres cotes */}
+          <div style={{ borderTop:'1px solid #21262d', paddingTop:12 }}>
+            <div style={{ fontSize:11, color:'#8b949e', fontWeight:600, marginBottom:8 }}>🎯 Filtres de cotes</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              <Slider k="minOdds" label="Cote minimale" unit="×" min={1.00} max={2.5} step={0.05}
+                help="Ignorer les très gros favoris" />
+              <Slider k="maxOdds" label="Cote maximale" unit="×" min={2} max={20} step={0.5}
+                help="Ignorer les très gros outsiders" />
+            </div>
+          </div>
+
+          {/* Gestion du risque */}
+          <div style={{ borderTop:'1px solid #21262d', paddingTop:12 }}>
+            <div style={{ fontSize:11, color:'#f85149', fontWeight:600, marginBottom:8 }}>🛡️ Gestion du risque</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              <Slider k="stopLossPct" label="Stop-loss bankroll" unit="%" min={10} max={95} step={5}
+                help="Arrêter si la bankroll descend en-dessous de (100−X)% de la bankroll initiale" />
+              <Slider k="maxConsecLosses" label="Pertes consécutives max" unit="" min={3} max={200} step={1}
+                help="Arrêter après X défaites consécutives" />
+            </div>
+          </div>
+
+          {/* Fiscalité */}
+          <div style={{ borderTop:'1px solid #21262d', paddingTop:12 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+              <div style={{ fontSize:11, color:'#8b949e', fontWeight:600 }}>💸 Fiscalité</div>
+              <Toggle k="taxEnabled" labelOn="ON" labelOff="OFF" />
+            </div>
+            <div style={{ fontSize:10, color:'#484f58', marginBottom:constraints.taxEnabled?8:0, fontStyle:'italic' }}>
+              France & UK: non taxé. Allemagne/Suisse: peut être imposable.
+            </div>
+            {constraints.taxEnabled && (
+              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                <Slider k="taxRate" label="Taux d'imposition" unit="%" min={5} max={55} step={1}
+                  help="Appliqué sur les gains nets annuels au-dessus du seuil" />
+                <Slider k="taxThreshold" label="Seuil d'imposition annuel" unit="€" min={0} max={50000} step={500}
+                  help="Gains en-dessous = exonéré" />
+              </div>
+            )}
+          </div>
+
         </div>
       )}
     </div>
@@ -754,12 +1047,38 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
               </div>
             )}
 
+            {/* Book restriction alert */}
+            {(result.nSoftLimited>0||result.nClosed>0) && (
+              <div style={{ background:'#0a1828', border:'1px solid #3b82f6', borderRadius:8, padding:'10px 16px' }}>
+                <div style={{ fontSize:12, color:'#60a5fa', fontWeight:600, marginBottom:6 }}>
+                  📚 Restrictions bookmakers déclenchées
+                </div>
+                <div style={{ display:'flex', gap:16, flexWrap:'wrap', marginBottom:8 }}>
+                  {result.nSoftLimited>0&&<span style={{ fontSize:11, color:'#f59e0b' }}>⚡ {result.nSoftLimited} book(s) en restriction douce (mise plafonnée)</span>}
+                  {result.nClosed>0&&<span style={{ fontSize:11, color:'#f85149' }}>🚫 {result.nClosed} compte(s) fermé(s) définitivement</span>}
+                </div>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                  {result.bookRestrictions.map(b=>(
+                    <span key={b.book} style={{ fontSize:10, padding:'2px 8px', borderRadius:4, background:b.status==='closed'?'#2a0a0a':'#1a1a00', border:`1px solid ${b.status==='closed'?'#f85149':'#f59e0b'}`, color:b.status==='closed'?'#f85149':'#f59e0b' }}>
+                      {bookLabel(b.book)} {b.status==='closed'?'🚫':'⚡'} ({eur(b.netPnl)})
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {result.totalTaxPaid>0 && (
+              <div style={{ background:'#0a1828', border:'1px solid #60a5fa', borderRadius:8, padding:'10px 16px', fontSize:12, color:'#60a5fa' }}>
+                💸 Taxes prélevées : <strong>{eur(result.totalTaxPaid)}</strong> (inclus dans le P&L affiché)
+              </div>
+            )}
+
             <div style={{ display:'flex', justifyContent:'flex-end' }}>
               <ExportBtn
                 data={{
-                  params:{ strategy:params.strategy, initialBankroll:params.initialBankroll, stakePerBet:params.stakePerBet, seasons:params.seasons, bookmakers:params.bookmakers },
-                  summary:{ totalBets:result.totalBets, totalWins:result.totalWins, winRate:result.winRate, totalPnL:result.totalPnL, roi:result.roi, finalBankroll:result.finalBankroll, initialBankroll:result.initialBankroll, maxDrawdown:result.maxDrawdown, longestWinStreak:result.longestWinStreak, longestLoseStreak:result.longestLoseStreak, avgOdds:result.avgOdds, profitFactor:result.profitFactor, gainMoyen:result.gainMoyen },
-                  bySeason:result.bySeason, byBook:result.byBook, byDate:result.byDate, byWeek:result.byWeek,
+                  params:{ strategy:params.strategy, initialBankroll:params.initialBankroll, stakePerBet:params.stakePerBet, seasons:params.seasons, bookmakers:params.bookmakers, constraints:params.constraints },
+                  summary:{ totalBets:result.totalBets, totalWins:result.totalWins, winRate:result.winRate, totalPnL:result.totalPnL, roi:result.roi, finalBankroll:result.finalBankroll, initialBankroll:result.initialBankroll, maxDrawdown:result.maxDrawdown, longestWinStreak:result.longestWinStreak, longestLoseStreak:result.longestLoseStreak, avgOdds:result.avgOdds, profitFactor:result.profitFactor, gainMoyen:result.gainMoyen, totalTaxPaid:result.totalTaxPaid, nSoftLimited:result.nSoftLimited, nClosed:result.nClosed },
+                  bookRestrictions:result.bookRestrictions, bySeason:result.bySeason, byBook:result.byBook, byDate:result.byDate, byWeek:result.byWeek,
                 }}
                 filename="betting_simulation.json"
                 label="↓ Export JSON (Simulation)"
