@@ -9,6 +9,22 @@ import {
   Tooltip, CartesianGrid, ReferenceLine, Cell,
 } from 'recharts';
 
+
+function ExportBtn({ data, filename, label='↓ Export JSON' }) {
+  const handle = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <button onClick={handle} style={{
+      padding:'7px 14px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+      background:'#0f2d10', border:'1px solid #3fb950', color:'#3fb950',
+    }}>{label}</button>
+  );
+}
 const pct  = (v, d=2) => v==null ? '—' : `${(v*100).toFixed(d)}%`;
 const sign = v => v>=0?'+':'';
 const MIN_N = 50;
@@ -343,6 +359,11 @@ export default function EdgeAnalyser({ matches, sharedOpcodes, threshModStat=-1,
           <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
             {/* Toolbar */}
             <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+              <ExportBtn
+                data={segResults.filter(r=>r.result).map(r=>({ type:r.type.id, label:r.type.label, category:r.type.category, condition:r.type.condition, ...r.result, byBook:r.result.byBook }))}
+                filename="edge_analysis.json"
+                label="↓ Export JSON"
+              />
               <div style={{ display:'flex', gap:4 }}>
                 {[['ranking','📋 Classement'],['grid','🔲 Grille']].map(([k,label])=>(
                   <button key={k} onClick={()=>setViewMode(k)} style={{

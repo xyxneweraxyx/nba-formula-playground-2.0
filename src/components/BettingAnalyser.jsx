@@ -8,6 +8,22 @@ import {
   Tooltip, CartesianGrid, ReferenceLine, Cell,
 } from 'recharts';
 
+
+function ExportBtn({ data, filename, label='↓ Export JSON' }) {
+  const handle = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <button onClick={handle} style={{
+      padding:'7px 14px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+      background:'#0f2d10', border:'1px solid #3fb950', color:'#3fb950',
+    }}>{label}</button>
+  );
+}
 const TOOLTIP_S = { background:'#161b22', border:'1px solid #30363d', borderRadius:8, fontSize:12, color:'#e6edf3' };
 const pct  = (v, d=2) => v==null ? '—' : `${(v*100).toFixed(d)}%`;
 const sign = v => v>=0?'+':'';
@@ -154,6 +170,10 @@ export default function BettingAnalyser({ matches, sharedOpcodes, threshModStat=
           </div>
         ) : (
           <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+            <div style={{ display:'flex', justifyContent:'flex-end' }}>
+              <ExportBtn data={analysis} filename="odds_analysis.json" label="↓ Export JSON (Odds Analyser)" />
+            </div>
+
             <div style={{ background:'#0d1117', border:'1px solid #21262d', borderRadius:12, overflow:'hidden' }}>
               <div style={{ padding:'14px 20px', borderBottom:'1px solid #21262d', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                 <div style={{ fontSize:13, fontWeight:600, color:'#e6edf3' }}>

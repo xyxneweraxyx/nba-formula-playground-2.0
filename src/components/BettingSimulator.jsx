@@ -143,18 +143,24 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
       let stake;
       if (strategy==='fixed') {
         stake = stakePerBet;
+        if (stake<=0||bankroll<=0) return;
       } else {
-        const p = match.no_vig_ref?(predHome?match.no_vig_ref.home:match.no_vig_ref.away):0.52;
-        const b = betOdds-1;
-        const fk = b>0?Math.max(0,(p*b-(1-p))/b):0;
+        // Kelly requires a reference probability — skip if unavailable
+        if (!match.no_vig_ref) return;
+        const p = predHome ? match.no_vig_ref.home : match.no_vig_ref.away;
+        const b = betOdds - 1;
+        if (b <= 0) return;
+        // Kelly fraction: (p*b - (1-p)) / b
+        const fk = (p * b - (1 - p)) / b;
+        if (fk <= 0) return;  // Kelly says no edge → don't bet
         const fraction = C.enabled ? C.flatKellyFraction : 0.25;
         stake = bankroll * fk * fraction;
-        const cap = C.enabled ? C.maxStakePct/100 : 0.05;
-        stake = Math.min(stake, bankroll*cap);
-        stake = Math.max(stake, 0.01);
+        const cap = C.enabled ? C.maxStakePct / 100 : 0.05;
+        stake = Math.min(stake, bankroll * cap);
+        // No artificial floor in Kelly mode — if Kelly says tiny bet, bet tiny
+        if (stake <= 0 || bankroll <= 0) return;
       }
-      stake = Math.min(stake, bankroll*0.95);
-      if (stake<=0||bankroll<=0) return;
+      stake = Math.min(stake, bankroll * 0.95);
 
       totalBets++; totalOddsSum+=betOdds; matchBetCount++;
       byBook[book].bets++; bySeason[match.season].bets++;
@@ -217,7 +223,7 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
   return {
     totalBets, totalWins,
     winRate:totalBets>0?totalWins/totalBets:0,
-    totalPnL, roi:totalBets>0?totalPnL/(totalBets*stakePerBet):0,
+    totalPnL, roi:totalBets>0?(strategy==='kelly'?totalPnL/initialBankroll:totalPnL/(totalBets*stakePerBet)):0,
     finalBankroll:bankroll, initialBankroll, maxDrawdown:maxDD,
     longestWinStreak:longestWS, longestLoseStreak:longestLS,
     avgOdds:totalBets>0?totalOddsSum/totalBets:0,
@@ -228,17 +234,33 @@ function runSimulation(opcodes, params, matches, threshModStat, quantileMode) {
     byBook: Object.entries(byBook).map(([book,s])=>({
       book, bets:s.bets, wins:s.wins,
       winRate:s.bets>0?s.wins/s.bets:0, pnl:s.pnl,
-      roi:s.bets>0?s.pnl/(s.bets*stakePerBet):0,
+      roi:s.bets>0?(strategy==='kelly'?s.pnl/initialBankroll:s.pnl/(s.bets*stakePerBet)):0,
     })).filter(b=>b.bets>0).sort((a,b)=>b.roi-a.roi),
     bySeason: Object.entries(bySeason).map(([season,s])=>({
       season, bets:s.bets, wins:s.wins,
       winRate:s.bets>0?s.wins/s.bets:0, pnl:s.pnl,
-      roi:s.bets>0?s.pnl/(s.bets*stakePerBet):0,
+      roi:s.bets>0?(strategy==='kelly'?s.pnl/initialBankroll:s.pnl/(s.bets*stakePerBet)):0,
     })).sort((a,b)=>a.season.localeCompare(b.season)),
   };
 }
 
 // ── Constraints panel ────────────────────────────────────────────────────────
+
+function ExportBtn({ data, filename, label='↓ Export JSON' }) {
+  const handle = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <button onClick={handle} style={{
+      padding:'7px 14px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+      background:'#0f2d10', border:'1px solid #3fb950', color:'#3fb950',
+    }}>{label}</button>
+  );
+}
 function ConstraintsPanel({ constraints, onChange }) {
   const { enabled } = constraints;
   return (
@@ -261,7 +283,7 @@ function ConstraintsPanel({ constraints, onChange }) {
             { key:'minOdds',           label:'Cote minimale',           unit:'×', min:1.05, max:2.5, step:0.05, help:'Ignorer sous cette cote' },
             { key:'maxOdds',           label:'Cote maximale',           unit:'×', min:2,    max:20,  step:0.5,  help:'Ignorer au-dessus' },
             { key:'stopLossPct',       label:'Stop-loss bankroll',      unit:'%', min:10,   max:80,  step:5,    help:'Arrêter si perte X% de l\'initiale' },
-            { key:'maxConsecLosses',   label:'Pertes consécutives max', unit:'',  min:3,    max:100,  step:1,    help:'Arrêter après X pertes consécutives' },
+            { key:'maxConsecLosses',   label:'Pertes consécutives max', unit:'',  min:3,    max:30,  step:1,    help:'Arrêter après X pertes consécutives' },
           ].map(({ key, label, unit, min, max, step, help }) => (
             <div key={key}>
               <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
@@ -737,6 +759,18 @@ export default function BettingSimulator({ matches, sharedOpcodes, threshModStat
                 ⚠️ Simulation arrêtée : <strong>{result.stopReason}</strong>
               </div>
             )}
+
+            <div style={{ display:'flex', justifyContent:'flex-end' }}>
+              <ExportBtn
+                data={{
+                  params:{ strategy:params.strategy, initialBankroll:params.initialBankroll, stakePerBet:params.stakePerBet, seasons:params.seasons, bookmakers:params.bookmakers },
+                  summary:{ totalBets:result.totalBets, totalWins:result.totalWins, winRate:result.winRate, totalPnL:result.totalPnL, roi:result.roi, finalBankroll:result.finalBankroll, initialBankroll:result.initialBankroll, maxDrawdown:result.maxDrawdown, longestWinStreak:result.longestWinStreak, longestLoseStreak:result.longestLoseStreak, avgOdds:result.avgOdds, profitFactor:result.profitFactor, gainMoyen:result.gainMoyen },
+                  bySeason:result.bySeason, byBook:result.byBook, byDate:result.byDate, byWeek:result.byWeek,
+                }}
+                filename="betting_simulation.json"
+                label="↓ Export JSON (Simulation)"
+              />
+            </div>
 
             {/* KPIs ligne 1 */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>

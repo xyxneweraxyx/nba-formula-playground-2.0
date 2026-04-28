@@ -5,6 +5,22 @@ import {
   CartesianGrid, Cell, ReferenceLine,
 } from 'recharts';
 
+
+function ExportBtn({ data, filename, label='↓ Export JSON' }) {
+  const handle = () => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <button onClick={handle} style={{
+      padding:'7px 14px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer',
+      background:'#0f2d10', border:'1px solid #3fb950', color:'#3fb950',
+    }}>{label}</button>
+  );
+}
 const BASELINE  = 0.6426;
 const TOOLTIP_S = { background:'#161b22', border:'1px solid #30363d', borderRadius:8, fontSize:12, color:'#e6edf3' };
 const pct = (v, d=2) => v==null||v===0 ? '—' : `${(v*100).toFixed(d)}%`;
@@ -329,6 +345,9 @@ export default function BruteforceAnalyser({ matches, onLoadFormula }) {
                   {stats.processed.toLocaleString('fr-FR')}
                 </span>
               </div>
+            </div>
+            <div style={{ display:'flex', justifyContent:'flex-end' }}>
+              <ExportBtn data={stats} filename="bruteforce_analysis.json" label="↓ Export JSON (Bruteforce)" />
             </div>
             <SizeTable data={stats.bySize} />
             <DistributionChart data={stats.distribution} />
